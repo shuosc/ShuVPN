@@ -96,7 +96,7 @@ class SettingsPage extends StatelessWidget {
             title: '实验性选项',
             onTap: () => context.go('/settings/experimental'),
           ),
-          // ⚠️ 「日志」与「关于」两行**故意不带副标题**，其余六行都带。
+          // ⚠️ 「日志」与「关于ShuVPN」两行**故意不带副标题**，其余六行都带。
           //
           // 这不是遗漏。上面六行是「你还得改点什么」的地方，副标题写的是
           // 里面有几件事；最后这两行是「看一眼」的地方 —— 一个是流水，
@@ -109,7 +109,7 @@ class SettingsPage extends StatelessWidget {
           ),
           SettingsRow(
             icon: Icons.info_outline,
-            title: '关于',
+            title: '关于ShuVPN',
             onTap: () => context.go('/settings/about'),
           ),
         ],

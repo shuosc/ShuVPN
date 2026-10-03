@@ -683,7 +683,7 @@ void main() {
       '网络连接',
       '实验性选项',
       '日志',
-      '关于',
+      '关于ShuVPN',
     ]) {
       expect(_settingsRow(entry), findsOneWidget, reason: '$entry 应该有一行入口');
     }
@@ -748,11 +748,58 @@ void main() {
       await _back(tester);
     }
 
-    await _openSettings(tester, '关于');
-    expect(find.text('第三方开源许可'), findsOneWidget);
-    expect(find.text('项目仓库'), findsOneWidget);
-    // Credits are prose, not four separate rows: they are not settings.
-    expect(find.textContaining('zju-connect'), findsOneWidget);
+    await _openSettings(tester, '关于ShuVPN');
+    // The page is two groups of rows; the group titles carry the structure
+    // (there is no card around either group).
+    expect(find.text('项目信息'), findsOneWidget);
+    expect(find.text('隐私与声明'), findsOneWidget);
+    for (final entry in <String>['源代码', '开源许可', '第三方开源许可', '贡献者', '权限说明']) {
+      expect(find.text(entry), findsOneWidget, reason: '$entry 应该有一行');
+    }
+    // The licence row states the licence but goes nowhere, so it is the only
+    // one without a chevron — the arrow is a promise that something opens.
+    expect(
+      find.descendant(
+        of: find.ancestor(
+          of: find.text('开源许可'),
+          matching: find.byType(ListTile),
+        ),
+        matching: find.byIcon(Icons.chevron_right),
+      ),
+      findsNothing,
+    );
+    // Every remaining row opens something, so none of them may be a dead end.
+    expect(find.byIcon(Icons.chevron_right), findsNWidgets(4));
+    // The mark is the launcher tile itself, not an icon-font glyph — the
+    // rounded square plus its shadow only reads as an app icon with the opaque
+    // blue tile behind the white mark.
+    expect(
+      find.descendant(
+        of: find.byType(ClipRRect),
+        matching: find.image(AssetImage('assets/images/icon_light.png')),
+      ),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('the permission page lists what the app actually asks for', (
+    tester,
+  ) async {
+    await _pumpApp(tester);
+    await _openSettings(tester, '关于ShuVPN');
+
+    // The rows ShuYo's page has but ShuVPN cannot back with anything: there is
+    // no site for the terms, no privacy policy and no update/feedback backend.
+    for (final gone in <String>['使用条款', '隐私政策', '检查更新', '问题与反馈']) {
+      expect(find.text(gone), findsNothing);
+    }
+
+    await tester.tap(find.text('权限说明'));
+    await tester.pumpAndSettle();
+
+    for (final entry in <String>['VPN 服务', '通知', '网络访问']) {
+      expect(find.text(entry), findsOneWidget, reason: '$entry 应该有一行');
+    }
   });
 
   testWidgets(
@@ -1033,7 +1080,7 @@ void main() {
       'OpenVPN 协议',
       '网络连接',
       '日志',
-      '关于',
+      '关于ShuVPN',
     ]) {
       await _openSettings(tester, entry);
       expect(find.byType(ShuCard), findsNothing, reason: '$entry 页上不该还有卡片包裹');
