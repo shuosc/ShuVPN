@@ -24,25 +24,21 @@ dependencies:
   #
   # `flutter_sangfor` owns the session lifecycle and the userspace SOCKS5
   # frontend; the two connector packages carry the protocol cores and never
-  # depend on each other. Everything is published on pub.dev -- except the
-  # first one, which is vendored under `third_party/` and pointed at by
-  # `dependency_overrides` below, because its Android VpnService needs four
-  # local patches (see the class doc in
-  # `third_party/flutter_sangfor/android/src/main/kotlin/com/tsinbei/flutter_sangfor/VpnTunnelService.kt`).
-  # It also carries the desktop TUN adapters (`TunDevice` for Linux,
-  # `UtunDevice` for macOS, `WintunDevice` for Windows) that the system-VPN
-  # data plane is built on.
+  # depend on each other. Everything is published on pub.dev, but the root
+  # package is overridden below to the `preca-hoshino` fork, whose Android
+  # VpnService carries four patches upstream has not taken (see the class doc
+  # in the fork's `VpnTunnelService.kt`). The override is what redirects the
+  # connectors' own hosted `flutter_sangfor` edge: pub admits one source per
+  # name, so a plain git entry here would be rejected as a conflict.
   #
   # Pinned to exact versions on purpose, not `^0.0.5`. The caret also admits
   # 0.0.8, and that combination does not compile: 0.0.8's `tcp_termination.dart`
-  # builds on types that only exist in a 0.0.8 root package, while
-  # `flutter_sangfor` is held at the vendored 0.0.5 by `dependency_overrides`.
-  # The mismatch stayed invisible locally because `pubspec.lock` pins 0.0.5, but
-  # the lock records the mirror URL it was written against, so CI -- which talks
-  # to pub.dev -- discards it and re-resolves. Exact pins make that re-resolution
-  # land on the same versions either way. Lift all three together, once
-  # `third_party/flutter_sangfor` is refreshed and the four VpnService patches
-  # are re-applied.
+  # builds on types that only exist in a 0.0.8 root package. The mismatch stayed
+  # invisible locally because `pubspec.lock` pins 0.0.5, but the lock records the
+  # mirror URL it was written against, so CI -- which talks to pub.dev --
+  # discards it and re-resolves. Exact pins make that re-resolution land on the
+  # same versions either way. Lift all three together, once the fork picks up a
+  # release that folds in the patches.
   flutter_sangfor: 0.0.5
   flutter_sangfor_easy_connect: 0.0.5
   flutter_sangfor_atrust: 0.0.5
@@ -86,12 +82,17 @@ dev_dependencies:
   flutter_lints: ^6.0.0
 
 # `flutter_sangfor_atrust` / `flutter_sangfor_easy_connect` declare
-# `flutter_sangfor` as a hosted dependency; an override is the only way to
-# make every dependent resolve to the patched copy instead. Drop this block
-# once the patches land upstream.
+# `flutter_sangfor` as a hosted dependency; an override is the only way to make
+# every dependent resolve to the fork instead. `ref: main` is pinned by the SHA
+# recorded in `pubspec.lock`, so advancing the fork takes an explicit
+# `flutter pub upgrade` plus the lock commit. Drop this block once the patches
+# land upstream.
 dependency_overrides:
   flutter_sangfor:
-    path: third_party/flutter_sangfor
+    git:
+      url: https://github.com/preca-hoshino/flutter_sangfor.git
+      ref: main
+      path: packages/flutter_sangfor
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec

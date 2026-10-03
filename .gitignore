@@ -25,3 +25,6 @@ ios/.symlinks/
 /.plan
 # Widget Preview related
 .widget_preview/
+
+# Local-only redirect of flutter_sangfor to the sibling fork checkout.
+pubspec_overrides.yaml
