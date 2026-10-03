@@ -1,0 +1,8 @@
+version: 2
+updates:
+  # pub 不纳入：三个 flutter_sangfor 包在 pubspec.yaml 里是精确锁 0.0.5，
+  # 上游按 lockstep 发版，dependabot 自动提版本会提出不兼容的组合。
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
