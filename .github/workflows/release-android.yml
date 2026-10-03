@@ -5,6 +5,9 @@ on:
 
 permissions:
   contents: write
+  # id-token 用于向 Sigstore 换取短期签名证书，attestations 用于把证明写入仓库。
+  id-token: write
+  attestations: write
 
 concurrency:
   group: android-release
@@ -68,6 +71,7 @@ jobs:
         shell: bash
         env:
           RELEASE_TAG: ${{ steps.version.outputs.release_tag }}
+          APK_NAME: ${{ steps.version.outputs.apk_name }}
         run: |
           set -euo pipefail
 
@@ -87,7 +91,20 @@ jobs:
             notes="Full commit history: [View all commits](${changelog_url})"
           fi
 
-          echo "notes=${notes}" >> "$GITHUB_OUTPUT"
+          # 多行输出必须用 name<<EOF ... EOF 分隔符格式，不能写成单行。
+          {
+            echo "notes<<RELEASE_NOTES_EOF"
+            echo "$notes"
+            echo
+            echo "### Verifying the download"
+            echo
+            echo "This APK carries a signed build provenance attestation. Verify it with the GitHub CLI:"
+            echo
+            echo '```'
+            echo "gh attestation verify ${APK_NAME} --repo ${GITHUB_REPOSITORY}"
+            echo '```'
+            echo "RELEASE_NOTES_EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Set up Java
         uses: actions/setup-java@v4
@@ -201,6 +218,13 @@ jobs:
               exit 1
             fi
           done
+
+      - name: Generate build provenance attestation
+        # subject-path 不带 subject-name 时，subject 名取文件名本身，
+        # 因此 gh attestation verify 直接用 APK 文件名即可匹配。
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: dist/*.apk
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
