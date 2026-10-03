@@ -1,7 +1,7 @@
 # ShuVPN
 
-[![Release](https://img.shields.io/github/v/release/preca-hoshino/ShuVPN?color=1677ff&label=release)](https://github.com/preca-hoshino/ShuVPN/releases)
-[![Downloads](https://img.shields.io/github/downloads/preca-hoshino/ShuVPN/total?color=1677ff&label=downloads)](https://github.com/preca-hoshino/ShuVPN/releases)
+[![Release](https://img.shields.io/github/v/release/shuosc/ShuVPN?color=1677ff&label=release)](https://github.com/shuosc/ShuVPN/releases)
+[![Downloads](https://img.shields.io/github/downloads/shuosc/ShuVPN/total?color=1677ff&label=downloads)](https://github.com/shuosc/ShuVPN/releases)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-1677ff)](./LICENSE)
 [![Flutter](https://img.shields.io/badge/Flutter-3.47.2-02569B?logo=flutter&logoColor=white)](https://flutter.dev)
 
@@ -14,7 +14,7 @@
 ## 安装
 
 ### Android
-Android 版本可以打开 [release 页面](https://github.com/preca-hoshino/ShuVPN/releases)下载。（依据设备差异，您可能需要在设置中允许「安装来自未知来源的应用」）
+Android 版本可以打开 [release 页面](https://github.com/shuosc/ShuVPN/releases)下载。（依据设备差异，您可能需要在设置中允许「安装来自未知来源的应用」）
 
 ### MacOS/Windows/Linux
 目前正在全力适配中，敬请期待。
@@ -29,7 +29,7 @@ HarmonyOS 4.X 及其以前版本系统请使用 Android 版本安装包。
 ### iOS/iPadOS
 目前暂时没有 ios/iPadOS 平台的适配计划。
 
-如果您遇到了本应用中不符合预期的行为，欢迎先查看已有的 [Issues](https://github.com/preca-hoshino/ShuVPN/issues)，也可以[新建 Issue](https://github.com/preca-hoshino/ShuVPN/issues/new/choose) 反馈问题或提出建议。修复问题或新增功能时，欢迎提交 Pull Request。
+如果您遇到了本应用中不符合预期的行为，欢迎先查看已有的 [Issues](https://github.com/shuosc/ShuVPN/issues)，也可以[新建 Issue](https://github.com/shuosc/ShuVPN/issues/new/choose) 反馈问题或提出建议。修复问题或新增功能时，欢迎提交 Pull Request。
 
 ## 编译说明
 
