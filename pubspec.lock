@@ -110,9 +110,11 @@ packages:
   flutter_sangfor:
     dependency: "direct main"
     description:
-      path: "../flutter_sangfor/packages/flutter_sangfor"
-      relative: true
-    source: path
+      path: "packages/flutter_sangfor"
+      ref: main
+      resolved-ref: "91a7efb2533ae87708ce6c221b3dea4d7fdf1098"
+      url: "https://github.com/preca-hoshino/flutter_sangfor.git"
+    source: git
     version: "0.0.12"
   flutter_sangfor_atrust:
     dependency: "direct main"
