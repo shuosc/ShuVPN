@@ -5,8 +5,8 @@
 /// a way the user would notice. Bump these together with `pubspec.yaml`.
 abstract final class ShuAppInfo {
   static const String name = 'ShuVPN';
-  static const String version = '0.3.0';
-  static const String buildLabel = '4';
+  static const String version = '0.3.1';
+  static const String buildLabel = '5';
 
   /// 显示用的版本号。括号用**全角**：它只出现在中文语境里（关于页、许可页）。
   static const String versionLabel = '$version（$buildLabel）';
