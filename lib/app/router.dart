@@ -3,11 +3,14 @@ import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/account/account_center.dart';
+import '../core/announcements/shu_announcement.dart';
 import '../core/settings/settings_store.dart';
 import '../features/account/account_page.dart';
 import '../features/connect/connect_page.dart';
+import '../features/notifications/announcement_detail_page.dart';
 import '../features/notifications/notifications_page.dart';
 import '../features/onboarding/welcome_page.dart';
+import '../features/services/coming_soon_page.dart';
 import '../features/services/services_page.dart';
 import '../features/settings/about_page.dart';
 import '../features/settings/appearance_settings_page.dart';
@@ -109,6 +112,27 @@ GoRouter createShuRouter({required SettingsStore settings}) {
               GoRoute(
                 path: '/services',
                 builder: (context, state) => const ServicesPage(),
+                routes: <RouteBase>[
+                  // 两个占位页。它们与下面那些设置二级页一样被推到根导航器上
+                  // ——「服务」在分支导航器里，不挂 `parentNavigatorKey` 的
+                  // 子页会被底栏盖住一半。
+                  _subPage(
+                    parentNavigatorKey: rootNavigatorKey,
+                    path: 'speedtest',
+                    builder: (context, state) => const ShuComingSoonPage(
+                      title: '网络测速',
+                      icon: Icons.speed_outlined,
+                    ),
+                  ),
+                  _subPage(
+                    parentNavigatorKey: rootNavigatorKey,
+                    path: 'library',
+                    builder: (context, state) => const ShuComingSoonPage(
+                      title: '图书馆目录',
+                      icon: Icons.local_library_outlined,
+                    ),
+                  ),
+                ],
               ),
             ],
           ),
@@ -185,6 +209,17 @@ GoRouter createShuRouter({required SettingsStore settings}) {
         parentNavigatorKey: rootNavigatorKey,
         path: '/notifications',
         builder: (context, state) => const NotificationsPage(),
+        routes: <RouteBase>[
+          // 条目整份随 `extra` 过来，不按 id 重新查一遍：详情页要的标题与
+          // 日期列表里已经有，重拉一次列表只是多一次往返。
+          _subPage(
+            parentNavigatorKey: rootNavigatorKey,
+            path: 'detail',
+            builder: (context, state) => AnnouncementDetailPage(
+              item: state.extra! as ShuAnnouncementListItem,
+            ),
+          ),
+        ],
       ),
       // 引导页挂在**根导航器的最外层**：它要盖住 dock，也不能被任何一条
       // 二级路由当作「上一页」推回去。

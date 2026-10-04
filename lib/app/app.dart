@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 
 import '../core/account/account_center.dart';
+import '../core/announcements/shu_announcement_client.dart';
 import '../core/connection/connection_controller.dart';
 import '../core/connection/protocol.dart';
 import '../core/settings/settings_store.dart';
@@ -17,7 +18,12 @@ import 'theme.dart';
 /// controller and the account center — and nothing else. Screens read them
 /// through `provider`; no screen owns connection state of its own.
 class ShuVpnApp extends StatefulWidget {
-  const ShuVpnApp({super.key, required this.settings, this.updateClient});
+  const ShuVpnApp({
+    super.key,
+    required this.settings,
+    this.updateClient,
+    this.announcementClient,
+  });
 
   final SettingsStore settings;
 
@@ -26,6 +32,12 @@ class ShuVpnApp extends StatefulWidget {
   /// 可注入只为测试：启动路径每次都会跑一次检查，而 widget 测试既不该真的
   /// 发请求，也不该依赖 GitHub 的返回。生产用 [GithubReleaseClient]。
   final ShuUpdateClient? updateClient;
+
+  /// 信息办公告的通道。
+  ///
+  /// 同样可注入只为测试：通知页一打开就拉列表，而 widget 测试不该依赖
+  /// shu.edu.cn 的返回。生产用 [NewitsAnnouncementClient]。
+  final ShuAnnouncementClient? announcementClient;
 
   @override
   State<ShuVpnApp> createState() => _ShuVpnAppState();
@@ -56,6 +68,12 @@ class _ShuVpnAppState extends State<ShuVpnApp> {
         ),
         Provider<ShuUpdateClient>(
           create: (_) => widget.updateClient ?? GithubReleaseClient(),
+        ),
+        Provider<ShuAnnouncementClient>(
+          create: (_) =>
+              widget.announcementClient ?? NewitsAnnouncementClient(),
+          // 真实现背后有一条常驻的解析 isolate，关应用时要收掉。
+          dispose: (_, client) => client.close(),
         ),
       ],
       child: Consumer<SettingsStore>(

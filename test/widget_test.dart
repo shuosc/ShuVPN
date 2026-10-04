@@ -655,7 +655,9 @@ void main() {
     await _pumpApp(tester);
 
     await _openTab(tester, '服务');
-    expect(find.text('还没有服务列表'), findsOneWidget);
+    // 服务页是「我能去哪」的目录：两个已经排进路线图、还没做的入口。
+    expect(find.text('网络测速'), findsOneWidget);
+    expect(find.text('图书馆目录'), findsOneWidget);
 
     await _openTab(tester, '设置');
     expect(_settingsRow('账户管理'), findsOneWidget);

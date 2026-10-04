@@ -21,10 +21,11 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shuvpn/app/app.dart';
 import 'package:shuvpn/core/logging/shu_log.dart';
 import 'package:shuvpn/core/settings/settings_store.dart';
+import 'package:shuvpn/features/notifications/notifications_page.dart';
 import 'package:shuvpn/features/onboarding/welcome_page.dart';
 import 'package:shuvpn/shell/floating_dock.dart';
-import 'package:shuvpn/widgets/shu_surfaces.dart';
 
+import 'announcement_stub.dart';
 import 'shu_update_stub.dart';
 
 /// 与 `widget_test.dart` 的视口一致：一台高瘦的手机（逻辑 360×1800）。
@@ -41,7 +42,13 @@ Future<void> _pumpApp(WidgetTester tester) async {
   final settings = await SettingsStore.load();
   settings.welcomeCompleted = true;
   await tester.pumpWidget(
-    ShuVpnApp(settings: settings, updateClient: StubShuUpdateClient()),
+    ShuVpnApp(
+      settings: settings,
+      updateClient: StubShuUpdateClient(),
+      // 通知页一打开就拉列表；这里装的是空替身，所以它停在「暂无公告」而不
+      // 是去连 shu.edu.cn。
+      announcementClient: StubShuAnnouncementClient(),
+    ),
   );
   await tester.pumpAndSettle();
 }
@@ -131,14 +138,24 @@ void main() {
     await tester.tap(find.byTooltip('通知'));
     await _pumpMidTransition(tester);
 
-    // ⚠️ 量的是**卡片**而不是卡片里的文字：`EmptyState` 的 `Column` 是居中
-    // 对齐的，文字静止时也在 x≈140，拿它当锚点的话这条断言在「完全没动画」
-    // 的情况下也会过。卡片的左边界静止时就是页边距 16。
-    expect(tester.getTopLeft(find.byType(EmptyState)).dx, greaterThan(60));
+    // ⚠️ 量的是**整页**而不是页内某段文字：通知页的内容随请求状态换
+    //（转圈 / 列表 / 空态），拿它里面任何一块当锚点，这条断言就会变成
+    //「那一块恰好存在」的测试。页面本身的左边界与内容无关。
+    expect(
+      tester.getTopLeft(find.byType(NotificationsPage)).dx,
+      greaterThan(60),
+    );
 
     await tester.pumpAndSettle();
-    expect(find.text('暂无通知'), findsOneWidget);
-    expect(tester.getTopLeft(find.byType(EmptyState)).dx, lessThan(60));
+    expect(tester.getTopLeft(find.byType(NotificationsPage)).dx, lessThan(60));
+    // 页面真的到了：标题是这一页自己的。
+    expect(
+      find.descendant(
+        of: find.byType(NotificationsPage),
+        matching: find.text('通知'),
+      ),
+      findsOneWidget,
+    );
   });
 
   testWidgets('账户管理的「概览 → 登录表单」也是滑过来的', (tester) async {

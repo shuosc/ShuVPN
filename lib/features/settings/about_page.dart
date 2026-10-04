@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../app/app_info.dart';
 import '../../app/shuyo_text_styles.dart';
@@ -8,6 +7,7 @@ import '../../app/theme.dart';
 import '../../core/update/shu_update_client.dart';
 import '../../core/update/shu_update_policy.dart';
 import '../../widgets/shu_app_bar.dart';
+import '../../widgets/shu_external_link.dart';
 import '../../widgets/shu_surfaces.dart';
 import '../../widgets/shu_update_prompt.dart';
 import 'permission_info_page.dart';
@@ -56,7 +56,8 @@ class _AboutPageState extends State<AboutPage> {
             icon: Icons.code,
             title: '源代码',
             subtitle: 'GitHub · shuosc/ShuVPN',
-            onTap: () => _openExternalUrl(context, ShuAppInfo.repository),
+            onTap: () =>
+                openShuExternalUrl(context, Uri.parse(ShuAppInfo.repository)),
           ),
           const _AboutRow(
             icon: Icons.balance_outlined,
@@ -72,7 +73,10 @@ class _AboutPageState extends State<AboutPage> {
             icon: Icons.groups_outlined,
             title: '贡献者',
             subtitle: '查看 GitHub Contributors',
-            onTap: () => _openExternalUrl(context, ShuAppInfo.contributorsUrl),
+            onTap: () => openShuExternalUrl(
+              context,
+              Uri.parse(ShuAppInfo.contributorsUrl),
+            ),
           ),
           const SizedBox(height: 18),
           const _AboutGroupTitle('隐私与声明'),
@@ -152,19 +156,6 @@ class _AboutPageState extends State<AboutPage> {
 ///
 /// 一律走系统浏览器（`externalApplication`）：这一页上的链接最终都落在
 /// GitHub 上，登录与跨站跳转交给浏览器处理更可靠。
-Future<void> _openExternalUrl(BuildContext context, String url) async {
-  var opened = false;
-  try {
-    opened = await launchUrl(
-      Uri.parse(url),
-      mode: LaunchMode.externalApplication,
-    );
-  } on Object {
-    opened = false;
-  }
-  if (!opened && context.mounted) showShuSnack(context, '无法打开链接');
-}
-
 void _showThirdPartyLicenses(BuildContext context) {
   showLicensePage(
     context: context,

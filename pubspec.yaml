@@ -49,6 +49,10 @@ dependencies:
   # privileges) or not capture-everything by design (Android).
   socks5_proxy: ^2.1.1
 
+  # HTML 解析用（信息办公告页是 VSB CMS 渲染出来的 HTML，站点没有 JSON 接口）。
+  # 只依赖 DOM 与选择器那一半 —— 网络仍走 `dart:io`，与 `core/auth` 同一条路。
+  html: ^0.15.6
+
   # SHA-256 of the server certificate, for the trust-on-first-use store.
   crypto: ^3.0.3
 
