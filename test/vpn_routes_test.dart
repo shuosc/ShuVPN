@@ -211,7 +211,6 @@ void main() {
     test('空路由表不会留下任何 DNS', () {
       const plan = ShuVpnRoutePlan(
         tunRoutes: <String>[],
-        l3Routes: <String>[],
         resourceRoutes: 0,
         domainRoutes: 0,
         tcpL3Routes: 0,
@@ -377,35 +376,38 @@ void main() {
     });
   });
 
-  // TUN 只能背得动 UDP：`matchL3Route` 对 TCP 有 `enableTcpPrefL3` 那道硬门，
-  // 而路由是按**目的地址**下发的，认不出协议。把 TCP 也能到达的网段交出去，
-  // 那些地址上的 TCP 就会进一个不报错的黑洞。
-  group('l3Routes（交给 TUN 的那一批）', () {
-    test('只有 UDP 资源占用的网段才进得去', () {
+  // TUN 拿走整张资源表：`matchL3Route` 对 TCP 那道 `enableTcpPrefL3` 的硬门
+  // 改由**逐流**的判断处理 —— 本机 TCP 终结器（`ATrustTcpTermination`）把
+  // L3 背不动的流接住，再按字节流转进隧道的 TCP 通道。
+  //
+  // 所以这一组要钉的是「一张资源表会变成哪些网段」，而不是「哪一小据网段
+  // 敢交给系统」—— 后者已经不是这一层的问题了。
+  group('tunRoutes（交给系统的那一份）', () {
+    test('只有 UDP 资源占用的网段照样在里面', () {
       final plan = shuVpnRoutePlanFor(<ATrustRoute>[
         _route('10.10.0.116', protocol: 'udp', portMin: 53, portMax: 53),
       ]);
-      expect(plan.l3Routes, <String>['10.10.0.116/32']);
+      expect(plan.tunRoutes, <String>['10.10.0.116/32']);
     });
 
-    test('同一段上还有 TCP 资源时被摘掉', () {
+    test('同一段上还有 TCP 资源时整段都在里面', () {
       final plan = shuVpnRoutePlanFor(<ATrustRoute>[
         // `10.0.1.116` 落在 `10.0.0.0/16` 里面。
         _route('10.0.1.116', protocol: 'udp', portMin: 53, portMax: 53),
         _route('10.0.0.0/16', protocol: 'all'),
       ]);
-      // `10.0.0.0/16` 是 `all`，能到 TCP —— 它一出现，落在里面的 DNS 段
-      // 就不该再进 TUN。
-      expect(plan.l3Routes, isEmpty);
-      // 但资源表本身仍然覆盖它（`covers` 回答的是「网关给了我什么」）。
+      // 折叠之后只剩那一条更大的网段 —— 而它**照样**交给系统，TCP 那一半
+      // 由终结器逐流接管。
+      expect(plan.tunRoutes, <String>['10.0.0.0/16']);
       expect(plan.covers('10.0.1.116'), isTrue);
     });
 
-    test('SHU 网关那 21 条资源下 l3Routes 是空的 —— 那不是 bug', () {
+    test('SHU 网关那 21 条资源折叠成整张 IPv4 表', () {
       // 这一段是照抄实测日志里那一整张表的形状（`04:54:02 DEBUG [conn] 资源[N]`）。
       // 结论很反直觉但很重要：只要网关给了 `1.0.0.0-255.255.255.255/tcp:*`
-      // 这种整表 Web 授权，**任何**内部网段都会被那道 TCP 门压住，TUN 因此
-      // 一条路由都不该接。TCP 全部走本机代理，L3 只服务少数 UDP。
+      // 这种整表 Web 授权，其余每一条内部网段都会落在它里面、被折叠掉。
+      // 那些地址上的 TCP 走不了 L3（`enableTcpPrefL3` 全是 false），所以
+      // `tcpL3Routes` 是 0 —— 它们的 TCP 由终结器接管。
       final plan = shuVpnRoutePlanFor(<ATrustRoute>[
         _route('10.10.0.209', protocol: 'tcp'),
         _route('10.10.10.196', protocol: 'tcp'),
@@ -442,7 +444,7 @@ void main() {
         _route('10.10.22.141', protocol: 'udp', portMin: 22, portMax: 22),
         _route('10.10.22.141', protocol: 'tcp', portMin: 22, portMax: 22),
       ]);
-      expect(plan.l3Routes, isEmpty);
+      expect(plan.tcpL3Routes, 0);
       // 整张表折叠之后就是那三条 `1.0.0.0-255.255.255.255/tcp:*` 授权本身 ——
       // 其余每一条内部网段都落在它们里面，会被折叠掉。这 8 条合起来覆盖
       // 1.0.0.0 ~ 255.255.255.255。
@@ -463,15 +465,6 @@ void main() {
       expect(plan.covers('0.1.2.3'), isFalse);
     });
 
-    test('同一条网段上既有 TCP 又有 UDP 时按「有 TCP」处理', () {
-      final plan = shuVpnRoutePlanFor(<ATrustRoute>[
-        _route('10.10.22.141', protocol: 'udp', portMin: 22, portMax: 22),
-        _route('10.10.22.141', protocol: 'tcp', portMin: 22, portMax: 22),
-      ]);
-      expect(plan.l3Routes, isEmpty);
-      expect(plan.tunRoutes, <String>['10.10.22.141/32']);
-    });
-
     test('破折号区间里的 UDP 也算数', () {
       final plan = shuVpnRoutePlanFor(<ATrustRoute>[
         _route(
@@ -481,106 +474,11 @@ void main() {
           portMax: 65535,
         ),
       ]);
-      expect(plan.l3Routes, isNotEmpty);
+      expect(plan.tunRoutes, isNotEmpty);
       expect(
-        plan.l3Routes.every((route) => route.startsWith('202.120.119.')),
+        plan.tunRoutes.every((route) => route.startsWith('202.120.119.')),
         isTrue,
       );
-    });
-  });
-
-  // 实验开关：本地把网关的 `enableTCPPrefL3` 翻成打开，验证服务端到底接不
-  // 接受 TCP-over-L3。它改的是客户端的信念，所以「改了哪些、没改哪些」必须
-  // 钉死 —— 翻错一类（比如把 UDP 也翻了）会让实验的结论失去意义。
-  group('shuForceTcpOverL3', () {
-    test('翻转 TCP 与 all，保留 UDP', () {
-      final routes = <ATrustRoute>[
-        _route('10.0.0.0/8', protocol: 'tcp'),
-        _route('10.1.0.0/16'),
-        _route('10.2.0.0/16', protocol: 'udp'),
-      ];
-
-      expect(shuForceTcpOverL3(routes), 2);
-      expect(routes[0].enableTcpPrefL3, isTrue);
-      expect(routes[1].enableTcpPrefL3, isTrue);
-      // `matchL3Route` 对 UDP 本来就没有那道门，翻它只会让
-      // `matchTcpRoute` 开始排除它 —— 那是引入新 bug。
-      expect(routes[2].enableTcpPrefL3, isFalse);
-    });
-
-    test('已经打开的不重复计数', () {
-      final routes = <ATrustRoute>[
-        _route('10.0.0.0/8', protocol: 'tcp', l3: true),
-      ];
-      expect(shuForceTcpOverL3(routes), 0);
-      expect(routes.single.enableTcpPrefL3, isTrue);
-    });
-
-    test('除标志外其余字段一字不动', () {
-      final routes = <ATrustRoute>[
-        ATrustRoute(
-          host: '1.0.0.0-255.255.255.255',
-          protocol: 'tcp',
-          portMin: 443,
-          portMax: 443,
-          appId: 'app-1',
-          nodeGroupId: 'group-9',
-          addrPretend: true,
-        ),
-      ];
-      shuForceTcpOverL3(routes);
-      final route = routes.single;
-      expect(route.host, '1.0.0.0-255.255.255.255');
-      expect(route.portMin, 443);
-      expect(route.portMax, 443);
-      expect(route.appId, 'app-1');
-      expect(route.nodeGroupId, 'group-9');
-      expect(route.addrPretend, isTrue);
-    });
-
-    test('翻转之后 l3Routes 从空变成整张表 —— 那正是实验要的', () {
-      final routes = <ATrustRoute>[
-        _route(
-          '1.0.0.0-255.255.255.255',
-          protocol: 'tcp',
-          portMin: 443,
-          portMax: 443,
-        ),
-        _route('10.10.0.116', protocol: 'udp', portMin: 53, portMax: 53),
-      ];
-      final before = shuVpnRoutePlanFor(routes);
-      // 常态：TCP 那几条把同段内的 UDP 顶掉，一片都不进 TUN。
-      expect(before.l3Routes, isEmpty);
-      expect(before.tcpL3Routes, 0);
-
-      shuForceTcpOverL3(routes);
-      final after = shuVpnRoutePlanFor(routes);
-      expect(after.tcpL3Routes, 1);
-      // 整张 IPv4 表（`10.10.0.116` 落在 `8.0.0.0/5` 里面，被并掉了）。
-      expect(after.l3Routes, <String>[
-        '1.0.0.0/8',
-        '2.0.0.0/7',
-        '4.0.0.0/6',
-        '8.0.0.0/5',
-        '16.0.0.0/4',
-        '32.0.0.0/3',
-        '64.0.0.0/2',
-        '128.0.0.0/1',
-      ]);
-      // 两种模式交出去的东西在这一次恰好相同 —— 因为这张表本来就是整表授权。
-      expect(after.tunRoutes, before.tunRoutes);
-    });
-
-    test('只翻转「走不了 L3 的 TCP」，已经是 L3 的资源不参与压制', () {
-      // 网关自己就把 TCP 开在 L3 上的话，那一段交给 TUN 是**对的** ——
-      // `tcpTouched` 不该把它算进去，否则 UDP 段会被平白顶掉。
-      final routes = <ATrustRoute>[
-        _route('10.0.0.0/16', protocol: 'tcp', l3: true),
-        _route('10.10.0.116', protocol: 'udp', portMin: 53, portMax: 53),
-      ];
-      final plan = shuVpnRoutePlanFor(routes);
-      expect(plan.l3Routes, contains('10.10.0.116/32'));
-      expect(plan.l3Routes, contains('10.0.0.0/16'));
     });
   });
 }

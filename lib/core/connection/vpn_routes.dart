@@ -32,7 +32,6 @@ import 'package:flutter_sangfor_atrust/flutter_sangfor_atrust.dart';
 class ShuVpnRoutePlan {
   const ShuVpnRoutePlan({
     required this.tunRoutes,
-    required this.l3Routes,
     required this.resourceRoutes,
     required this.domainRoutes,
     required this.tcpL3Routes,
@@ -43,15 +42,10 @@ class ShuVpnRoutePlan {
   /// 也就是「这张资源表一共覆盖了哪些地址」。
   ///
   /// 已去重、已折叠（被更大网段包含的会被删掉）、已按数值排序 ——
-  /// 排序是为了让日志与测试有确定的顺序。它用来回答「网关给了我什么」
-  /// 以及「这个 DNS 在不在资源表内」，**不是**直接交给系统的那一份。
-  final List<String> tunRoutes;
-
-  /// 真正可以交给 `VpnService.Builder.addRoute` 的那一批。
+  /// 排序是为了让日志与测试有确定的顺序。它同时回答「网关给了我什么」、
+  /// 「这个 DNS 在不在资源表内」与「哪些流量会被系统送进 TUN」。
   ///
-  /// 它是 [tunRoutes] 的子集，只留下**隧道确实背得动**的目的地。
-  ///
-  /// ## 为什么不把 [tunRoutes] 整份交给系统
+  /// ## 为什么可以整份交给系统
   ///
   /// aTrust 的 L3 数据面在 `matchL3Route` 里对 TCP 有一道硬门：
   ///
@@ -59,18 +53,15 @@ class ShuVpnRoutePlan {
   /// if (protocol == 'tcp' && !route.enableTcpPrefL3) continue;
   /// ```
   ///
-  /// 网关没有逐资源打开 `enableTCPPrefL3` 时（SHU 的网关就是一条都没开），
-  /// **任何 TCP 包都会被 `sendPacket` 静默丢弃**：它返回 `false`，而
+  /// 网关没有逐资源打开 `enableTcpPrefL3` 时（SHU 的网关就是一条都没开），
+  /// 那些 TCP 包会被 `sendPacket` 静默丢弃：它返回 `false`，而
   /// `SangforTunnelRouter` 把返回值丢掉了，包就此蒸发。
   ///
-  /// 而 `VpnService` 的路由是按**目的地址**分流的，认不出「这条是 UDP」。
-  /// 把一条 TCP 也能到达的网段交给 TUN，等于把那些地址上的 TCP 全部送进
-  /// 黑洞：浏览器打不开、连不上，而且**没有任何报错** —— 这比不接管更难排查。
-  ///
-  /// 所以这里只保留「同一条网段上没有任何非 UDP 资源」的那些。SHU 的网关
-  /// 给 `1.0.0.0-255.255.255.255/tcp:443` 这种全表授权，于是这一列经常是空的；
-  /// 那正是 TCP 必须交给本机代理（`shu_http_proxy.dart` / SOCKS5）的信号。
-  final List<String> l3Routes;
+  /// 从前这会逼着客户端只挑「同一条网段上没有任何非 UDP 资源」的那一小据
+  /// 交给 TUN（否则那些地址上的 TCP 会整片进黑洞）。现在那道门改由**逐流**
+  /// 的判断处理 —— 本机 TCP 终结器（`ATrustTcpTermination`）把 L3 背不动的
+  /// 流接住，再按字节流转进隧道的 TCP 通道 —— 所以整张表都交得出去。
+  final List<String> tunRoutes;
 
   /// 网关下发的资源条数（含域名型）。
   final int resourceRoutes;
@@ -81,8 +72,16 @@ class ShuVpnRoutePlan {
 
   /// 其中 TCP 走 L3 的条数。
   ///
-  /// 这是网关侧的一个开关（`enableTCPPrefL3`）。**没开这个开关的资源，
-  /// 它的 TCP 流量进了 TUN 也会被丢掉** —— 见 [describe] 里那句提醒。
+  /// 这是网关侧的一个开关（`enableTCPPrefL3`），也是这张表**唯一没有**
+  /// 体现出来的东西：TUN 路由是按目的**地址**下发的，认不出协议，所以
+  /// 「这一段上的 TCP 能不能走 L3」在客户端没法用路由表达。
+  ///
+  /// 那些走不了的 TCP 由本机终结器逐流接管（`ATrustTcpTermination`）：
+  /// 它在本机完成握手，再按字节流转进隧道的 TCP 通道。于是交出去的可以是
+  /// [tunRoutes] 的全部，而不必先挑出一个「只用 UDP 的小子集」。
+  ///
+  /// 这个数只用于日志 —— 它说「网关给了几条 TCP 走 L3 的资源」，
+  /// 而 SHU 的网关是 0。
   final int tcpL3Routes;
 
   /// 域名型资源的原始写法（`*.shu.edu.cn` 这种），原序、已去重。
@@ -174,11 +173,10 @@ class ShuVpnRoutePlan {
 /// | `*.shu.edu.cn` | **跳过**，靠 DNS 落到某条网段里 |
 ///
 /// 不做协议过滤：TUN 路由本身不带协议，而「哪些 TCP 能走 L3」是网关那边
-/// 逐资源的开关，在客户端这一侧无法用路由表达。
+/// 逐资源的开关，在客户端这一侧无法用路由表达 —— 那一半交给本机 TCP
+/// 终结器逐流判断（见 [ShuVpnRoutePlan.tcpL3Routes]）。
 ShuVpnRoutePlan shuVpnRoutePlanFor(List<ATrustRoute> routes) {
   final cidrs = <_Cidr>{};
-  final l3Cidrs = <_Cidr>{};
-  final tcpTouched = <_Cidr>{};
   final domains = <String>[];
   var domainRoutes = 0;
   var tcpL3Routes = 0;
@@ -191,42 +189,18 @@ ShuVpnRoutePlan shuVpnRoutePlanFor(List<ATrustRoute> routes) {
     final parsed = _parseHostCidrs(host);
     if (parsed == null) {
       // 域名 / 通配域名：TUN 路由里没有它，只能指望 DNS 把名字解析到
-      // 上面某条网段里；而本机代理正好相反 —— 它拨的就是名字。
+      // 上面某条网段里；而本机代理与终结器的反查表正好相反 —— 它们要的
+      // 就是名字。
       domainRoutes++;
       if (!domains.contains(host)) domains.add(host);
       continue;
     }
     cidrs.addAll(parsed);
-    // 这条资源覆盖的地址上有没有人做**走不了 L3 的 TCP**？有的话这一段一个
-    // 都不能进 TUN（会变成黑洞，见 [ShuVpnRoutePlan.l3Routes]）。
-    //
-    // 判据是「协议不是 UDP」**且**「这条资源的 TCP 走不了 L3」：
-    //
-    // * `udp` —— `matchL3Route` 对 UDP 本来就没有那道门，永远安全；
-    // * `tcp` / `all` 且 `enableTcpPrefL3` —— 它的 TCP 本来就走 L3，
-    //   把这一段交给 TUN 是**对的**（SHU 的网关没有这样的资源，别处的可能
-    //   有；本地实验开关翻转出来的就是这一类）；
-    // * 其余 —— 那个地址上的 TCP 只能走 TCP 隧道，交出去就是黑洞。
-    if (route.protocol == 'udp') {
-      l3Cidrs.addAll(parsed);
-    } else if (route.enableTcpPrefL3) {
-      l3Cidrs.addAll(parsed);
-    } else {
-      tcpTouched.addAll(parsed);
-    }
   }
 
-  // 把「被非 UDP 资源压住」的段摘掉：`10.0.0.0/16` 是 `all`，它一出现，
-  // 落在里面的 `10.10.0.116/32`（网关 DNS）就不该再进 TUN。
-  l3Cidrs.removeWhere(
-    (candidate) => tcpTouched.any((other) => _overlaps(other, candidate)),
-  );
-
   final collapsed = _collapse(cidrs).toList()..sort(_byAddress);
-  final collapsedL3 = _collapse(l3Cidrs).toList()..sort(_byAddress);
   return ShuVpnRoutePlan(
     tunRoutes: <String>[for (final cidr in collapsed) cidr.format()],
-    l3Routes: <String>[for (final cidr in collapsedL3) cidr.format()],
     resourceRoutes: routes.length,
     domainRoutes: domainRoutes,
     tcpL3Routes: tcpL3Routes,
@@ -295,50 +269,6 @@ bool shuExpandATrustRouteRanges(List<ATrustRoute> routes) {
 
 /// 已展开过的资源表（按列表对象本身记），避免重复追加。
 final Expando<bool> _rangesExpanded = Expando<bool>('shuATrustRangesExpanded');
-
-/// **实验用**：把资源表里每一条「TCP 能到达」的资源在本地翻成
-/// `enableTcpPrefL3 = true`，让 `matchL3Route` 收下 TCP。
-///
-/// ## 它改的是客户端的信念，不是服务端的配置
-///
-/// `enableTcpPrefL3` 来自网关 JSON 的 `enableTCPPrefL3`（`resource.dart:69`），
-/// 是**应用级**的标记。它的真正含义是「这个 app 的 TCP 走哪条通道」，两条
-/// 匹配器对它严格互补：
-///
-/// | 标志 | `matchL3Route` | `matchTcpRoute` |
-/// | :--- | :--- | :--- |
-/// | `true` | 放行 | 要 `includeL3Preferred` 才收 |
-/// | `false` | 跳过 TCP | 收 |
-///
-/// 本地翻它**不会**改变服务端的行为：L3 的每个五元组第一次出现时要先发一次
-/// 流认证请求，而那个请求里明写了协议（`url: "tcp:1.2.3.4:443"` 与
-/// `ip.protocol = 6`）—— 服务端答不答应取决于它自己那份配置。
-///
-/// 所以这个函数的用途是**验证**而不是优化：服务端接受 TCP-over-L3 的话，
-/// 「系统代理 + HTTP 代理」那一半就可以撤掉；不接受的话它会话里回来一个
-/// 非零 status，而 `atrust_channel_probe.dart` 会把那个 status 记下来。
-///
-/// 原地修改（与 [shuExpandATrustRouteRanges] 同性质），返回被翻转的条数。
-int shuForceTcpOverL3(List<ATrustRoute> routes) {
-  var changed = 0;
-  for (var index = 0; index < routes.length; index++) {
-    final route = routes[index];
-    if (route.enableTcpPrefL3) continue;
-    if (route.protocol != 'tcp' && route.protocol != 'all') continue;
-    routes[index] = ATrustRoute(
-      host: route.host,
-      protocol: route.protocol,
-      portMin: route.portMin,
-      portMax: route.portMax,
-      appId: route.appId,
-      nodeGroupId: route.nodeGroupId,
-      addrPretend: route.addrPretend,
-      enableTcpPrefL3: true,
-    );
-    changed++;
-  }
-  return changed;
-}
 
 /// 本机代理能不能把这个目标交给隧道。
 ///
@@ -505,10 +435,6 @@ _Cidr? _parseCidr(String raw) {
   if (base == null || prefix == null || prefix < 0 || prefix > 32) return null;
   return _Cidr(base & _maskFor(prefix), prefix);
 }
-
-/// 两个网段有没有交集（含一方完全包含另一方的两种情况）。
-bool _overlaps(_Cidr left, _Cidr right) =>
-    _covers(left, right) || _covers(right, left);
 
 int _byAddress(_Cidr left, _Cidr right) {
   final byBase = left.base.compareTo(right.base);

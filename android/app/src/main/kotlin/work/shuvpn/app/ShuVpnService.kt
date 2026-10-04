@@ -9,7 +9,6 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
 import android.net.IpPrefix
-import android.net.ProxyInfo
 import android.net.VpnService
 import android.os.Build
 import android.system.OsConstants
@@ -53,8 +52,8 @@ import java.net.InetAddress
  *
  * | 项 | 取值 | 理由 |
  * | :--- | :--- | :--- |
- * | 路由 | 网关下发**且 L3 背得动**的网段 | 见 `vpn_routes.dart`：L3 是资源转发表，且对 TCP 有一道硬门 |
- * | 系统代理 | 指向本机 HTTP 通道 | 应用们的 TCP 靠它进隧道（路由按地址分流，认不出协议） |
+ * | 路由 | 网关下发的全部网段 | 见 `vpn_routes.dart`：L3 是资源转发表 |
+ * | TCP | 由 Dart 侧的终结器接住 | L3 对 TCP 有一道硬门，进去只会被静默丢弃 |
  * | IPv6 | `allowFamily(AF_INET6)` | **不接管，但也不封死** —— 见 [applyAddressFamilies] |
  * | 自身 | `addDisallowedApplication` | 隧道传输必须留在底层网络，否则自环 |
  * | DNS | 见 [establish] | 用户填的走隧道；自动回落的那组走底层 |
@@ -127,12 +126,9 @@ class ShuVpnService : VpnService() {
      * 被排除在隧道之外 —— 只在隧道 DNS 不可达时才会用到它们，这样
      * 「网关 DNS 不通」不会连带把公网域名解析也拖死。
      *
-     * [httpProxyHost] / [httpProxyPort] 是本机 HTTP 代理的地址（见
-     * `shu_http_proxy.dart`），端口大于 0 时会被写进系统代理设置。它是
-     * **应用们的 TCP 能进隧道的唯一入口**：aTrust 的 L3 数据面只背得动 UDP
-     * （`matchL3Route` 对 TCP 有 `enableTcpPrefL3` 那道门，SHU 的网关一条
-     * 都没开），而 TUN 的路由按目的**地址**分流、认不出协议 —— 把 TCP 也能
-     * 到达的网段交出去只会建出一个不报错的黑洞。
+     * [routes] 是网关资源表展开后的**全部**网段。TCP 里 L3 背不动的那些
+     * 由 Dart 侧的本机终结器接住（见 `connection_controller.dart` 的
+     * `startVpn`），所以这一层不需要再做任何协议上的取舍，也不设系统代理。
      */
     fun establish(
         address: String,
@@ -140,8 +136,6 @@ class ShuVpnService : VpnService() {
         mtu: Int,
         routes: List<String>,
         tunnelDnsServers: List<String>,
-        httpProxyHost: String,
-        httpProxyPort: Int,
         notificationTitle: String,
         disconnectLabel: String,
     ): Int? {
@@ -153,19 +147,6 @@ class ShuVpnService : VpnService() {
             .addAddress(address, prefixLength)
 
         if (mtu > 0) builder.setMtu(mtu)
-
-        // 把系统代理指到本机的 HTTP 通道上。
-        //
-        // `setHttpProxy` 是平台自己给出的、唯一能「告诉所有应用 HTTP(S)
-        // 应该交给谁」的机制 —— Android 的系统代理只有 HTTP，没有 SOCKS，
-        // 也没有任何开关能表达「所有应用都走 SOCKS5」。
-        //
-        // 它需要 API 29（Q）。低版本上这个方法不存在，只能由用户自己在
-        // WLAN 设置里把代理地址填成同一个端口 —— 所以端口要显示在界面上。
-        if (httpProxyPort > 0 && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            val host = httpProxyHost.ifEmpty { "127.0.0.1" }
-            builder.setHttpProxy(ProxyInfo.buildDirectProxy(host, httpProxyPort))
-        }
 
         for (route in routes) {
             val separator = route.lastIndexOf('/')

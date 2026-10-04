@@ -1,6 +1,6 @@
 import 'dart:io';
 
-/// 本机 SOCKS5 代理**监听在哪张网卡上**。
+/// 本机代理（HTTP / SOCKS5）**监听在哪张网卡上**。
 ///
 /// 这不是「代理模式」那种偏好，而是一条**安全边界**：
 ///
@@ -18,8 +18,8 @@ import 'dart:io';
 ///
 /// 只有「仅本机 / 所有网卡」两项时，想让**某一张网卡**上的设备连进来
 /// （比如只放行 USB 网络共享出来的那一台，而不放行整个 Wi-Fi）就没有办法
-/// 表达。而 `SangforSocks5Server.listenAddress` 收的就是一个
-/// [InternetAddress]，「绑哪一张网卡」本来就是它最直接的一个参数。
+/// 表达。而 `SangforSocks5Server.listenAddress` 与 [ServerSocket.bind] 收的
+/// 就是一个 [InternetAddress]，「绑哪一张网卡」本来就是它最直接的一个参数。
 /// 所以这里放开成字面地址，只保留一条底线：**必须是一个能解析的 IP
 /// 字面量**（不接受主机名 —— 那需要一次 DNS 查询，而绑定发生在代理启动
 /// 的那条路径上）。
@@ -56,7 +56,7 @@ class ShuProxyListen {
   /// 因为任何一个非回环地址都意味着别的设备能连上。
   bool get exposesToNetwork => !isLoopback;
 
-  /// 交给 `SangforSocks5Server.listenAddress` 的取值。
+  /// 交给 `SangforSocks5Server.listenAddress` / `ServerSocket.bind` 的取值。
   ///
   /// [parse] / [fromStored] 保证了 [address] 一定是能解析的字面量，所以
   /// 这里的兜底分支正常走不到；留着它是为了「一个坏值不该让代理起不来」——

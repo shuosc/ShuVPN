@@ -144,10 +144,6 @@ class ShuVpnPlugin :
         val mtu = call.argument<Int>("mtu") ?: 0
         val routes = call.argument<List<String>>("routes") ?: emptyList()
         val dnsServers = call.argument<List<String>>("dnsServers") ?: emptyList()
-        // 系统代理指向的是本机那个 HTTP 通道。主机默认回环，只有监听地址被
-        // 限定在具名网卡上时 Dart 侧才会传一个别的值。
-        val httpProxyHost = call.argument<String>("httpProxyHost") ?: "127.0.0.1"
-        val httpProxyPort = call.argument<Int>("httpProxyPort") ?: 0
         val notificationTitle = call.argument<String>("notificationTitle") ?: "ShuVPN"
         val disconnectLabel = call.argument<String>("disconnectLabel") ?: "断开"
 
@@ -164,8 +160,6 @@ class ShuVpnPlugin :
                     mtu = mtu,
                     routes = routes,
                     tunnelDnsServers = dnsServers,
-                    httpProxyHost = httpProxyHost,
-                    httpProxyPort = httpProxyPort,
                     notificationTitle = notificationTitle,
                     disconnectLabel = disconnectLabel,
                 )

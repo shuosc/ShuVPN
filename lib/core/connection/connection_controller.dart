@@ -262,15 +262,14 @@ class ConnectionController extends ChangeNotifier {
 
   /// HTTP 通道现在实际监听的端口；没在跑时为 `null`。
   ///
-  /// 它同时是 `VpnService.Builder.setHttpProxy` 要填的那个值，所以必须
-  /// 是**实际绑定**的结果而不是设置里的数字 —— 端口被占时会退到系统
-  /// 随便给一个，而系统代理只能指向真的在听的那个。
+  /// 它和 [_boundSocksPort] 是同一件事的两半：端口被占时会退到系统随便给
+  /// 一个，而界面该显示的是真的在听的那一个。
   int? get httpPort => _boundHttpPort;
 
   /// 现在实际监听的 HTTP 地址。代理没在跑时就是设置里那一个。
   ShuProxyListen get httpListen => _boundHttpListen ?? _settings.httpListen;
 
-  /// 给系统代理 / 给用户看的 HTTP 地址；没在跑时为 `null`。
+  /// 给用户看的 HTTP 地址；没在跑时为 `null`。
   String? get httpProxyAddress {
     final port = _boundHttpPort;
     final listen = _boundHttpListen;
@@ -280,27 +279,16 @@ class ConnectionController extends ChangeNotifier {
 
   /// 与 [proxyAddress] 同形的那一串，给 HTTP 通道用。
   ///
-  /// 与 [httpProxyAddress] 的分工：那个**只在真的在听时非空**（它的用途是
-  /// 交给 `setHttpProxy`，只能填真实绑定的端口），而这一条任何时候都有值 ——
-  /// 抽屉里那一行讲的是「这一路怎么连」，还没连上时照着设置里那个值写。
+  /// 与 [httpProxyAddress] 的分工：那个**只在真的在听时非空**（只能填真实
+  /// 绑定的端口），而这一条任何时候都有值 —— 抽屉里那一行讲的是「这一路
+  /// 怎么连」，还没连上时照着设置里那个值写。
   String get httpListenAddress =>
       '${_bindHost(httpListen)}:${_boundHttpPort ?? _settings.httpPort}';
 
-  /// 交给 `VpnService.Builder.setHttpProxy` 的主机部分。
-  ///
-  /// 系统代理把它填给所有应用，那些应用是在**本机**发起连接的，所以能用
-  /// `127.0.0.1` 就必须用 `127.0.0.1`。只有把监听地址限定在某一张具名网卡上
-  /// （既不包含回环、也不是通配地址）时，回环才真的没人监听 —— 那种配置下
-  /// 只能填那个具名地址，并且要在日志里说一句。
-  String get _systemProxyHost {
-    final listen = _boundHttpListen;
-    if (listen == null || listen.allInterfaces || listen.isLoopback) {
-      return '127.0.0.1';
-    }
-    return listen.address;
-  }
-
   /// 展示用的主机部分。
+  ///
+  /// [ShuProxyListen.allInterfaces] 时显示的不能是 `0.0.0.0` —— 它连不上，
+  /// 交给用户的是本机在某张网卡上的真实地址（见 [_advertisedHost]）。
   String _bindHost(ShuProxyListen listen) {
     if (!listen.allInterfaces) return listen.address;
     // 查不到就照实写 `0.0.0.0` —— 它虽然连不上，但「所有网卡」这个含义
@@ -340,7 +328,9 @@ class ConnectionController extends ChangeNotifier {
 
   /// 代理这一侧的字节账本。系统 VPN 那一侧的账在 `_vpnObserver` 上。
   ///
-  /// 两条不会重复计数：交给 TUN 的只有 UDP 网段，TCP 全部走代理。
+  /// 两条不会重复计数：两个本机代理监听的是回环（或某张具名网卡），而交给
+  /// TUN 的路由来自网关资源表、不含回环，本应用自己的 socket 又被排除在
+  /// VPN 之外（`addDisallowedApplication`）。
   final ShuTrafficMeter _meter = ShuTrafficMeter();
 
   /// 每秒采一次速率的定时器。隧道建立之后才开，拆掉就停 —— 一个不在
@@ -383,9 +373,11 @@ class ConnectionController extends ChangeNotifier {
 
   /// 与 SOCKS5 并列的那条 HTTP 通道。
   ///
-  /// 它不是可选项：Android 的系统代理（包括 `VpnService.Builder.setHttpProxy`）
-  /// **只支持 HTTP**，把应用指向一个 SOCKS5 端口的结果就是永远没有连接进来。
+  /// 它服务的是一群**只会 HTTPS 代理**的消费者：Android 的系统代理（WLAN →
+  /// 代理）只有 HTTP，把应用指向一个 SOCKS5 端口的结果就是永远没有连接进来。
   /// 两者共用同一个 dialer，见 `shu_http_proxy.dart`。
+  ///
+  /// 它不是系统 VPN 的依赖：VPN 那一半的 TCP 由终结器接住。
   ShuHttpProxy? _httpProxy;
   SangforCancellationToken? _loginToken;
   SangforCancellationToken? _proxyToken;
@@ -401,6 +393,12 @@ class ConnectionController extends ChangeNotifier {
   ShuAndroidVpnDevice? _vpnDevice;
   SangforTunnelRouter? _vpnRouter;
   SangforCancellationToken? _vpnToken;
+
+  /// 本机 TCP 终结器 —— 系统 VPN 里那些 L3 背不动的 TCP 流由它接住。
+  ///
+  /// 它必须跟着 VPN 一起停：终结器持有的那些连接会一直读隧道，留着它们
+  /// 就是在替一个已经被关掉的接口转发字节。
+  SangforTcpTerminator? _vpnTerminator;
   StreamSubscription<void>? _vpnDisconnectSub;
   bool? _vpnPrepared;
 
@@ -465,6 +463,7 @@ class ConnectionController extends ChangeNotifier {
     _vpnToken?.cancel('controller disposed');
     unawaited(_socks5?.close().catchError((Object _) {}));
     unawaited(_httpProxy?.close().catchError((Object _) {}));
+    unawaited(_vpnTerminator?.close().catchError((Object _) {}));
     unawaited(_vpnRouter?.stop().catchError((Object _) {}));
     unawaited(_vpnDevice?.close().catchError((Object _) {}));
     unawaited(_vpnDisconnectSub?.cancel());
@@ -472,6 +471,7 @@ class ConnectionController extends ChangeNotifier {
     _httpProxy = null;
     _boundHttpPort = null;
     _boundHttpListen = null;
+    _vpnTerminator = null;
     _vpnRouter = null;
     _vpnDevice = null;
     _connector = null;
@@ -628,15 +628,17 @@ class ConnectionController extends ChangeNotifier {
 
   /// Exposes the connector's tunnel dialer as a SOCKS5 dialer.
   SangforTcpDialer _dialerFor(SangforConnector connector) {
-    if (connector is EasyConnectConnector) return connector.dialTcp;
+    if (connector is EasyConnectConnector) {
+      // EasyConnect 不经过隧道的 `dialTcp`，计时得单独包一层 —— 见
+      // [_timedDial] 记的是哪一段。
+      return (host, port) => _timedDial(() => connector.dialTcp(host, port));
+    }
     if (connector is ATrustConnector) {
       // ⚠️ 这里**绕过了** `ATrustConnector.dialTcp`，直接调隧道那一层。
       //
       // 原因是那个方法把 `includeL3Preferred` 丢掉了：它只转发
       // `resolvedIp` / `zeroRtt`（`flutter_sangfor_atrust.dart:86`），
-      // 于是网关标记为「L3 优先」的资源全部匹配不到，`ATrustTunnel.dialTcp`
-      // 直接抛 `no TCP tunnel resource for host:port` —— 一个连不上的站点
-      // 看起来与「网关没给你开权限」完全一样，排障时无从下手。
+      // 于是网关标记为「L3 优先」的资源全部匹配不到。见 [_dialTunnelTcp]。
       //
       // `ATrustTcpTunnelStream` 是公开类型，所以自己包一下就行。
       // 这不是新增能力，只是把 SDK 默认关着的那一半资源打开。
@@ -785,7 +787,8 @@ class ConnectionController extends ChangeNotifier {
   /// SDK 抛出的 `channel closed during TCP tunnel handshake` 一句看不出是
   /// 这个原因，而 `TimeoutException after 0:00:18` 更是只会让人以为网络慢。
   /// 所以这里把耗时一并记下来 —— 它是区分「握手被拒」与「网络慢」的唯一
-  /// 现场信息。
+  /// 现场信息。（滑动平均由 [_timedDial] 另记一次：那一格要的是长期读数，
+  /// 这一行要的是**这一次**。）
   Future<SangforTcpStream> _openTunnelStream(
     ATrustTunnel tunnel,
     String target,
@@ -793,33 +796,65 @@ class ConnectionController extends ChangeNotifier {
     String host,
     int port,
   ) async {
-    final started = DateTime.now();
+    final watch = Stopwatch()..start();
     final ATrustTcpTunnelConn connection;
     try {
-      connection = await tunnel.dialTcp(host, port, includeL3Preferred: true);
+      connection = await _dialTunnelTcp(tunnel, host, port);
     } on Object catch (error) {
+      watch.stop();
       _proxyTunnelFailures++;
       _meter.dialFailures++;
       ShuLog.w(
         ShuLogTag.proxy,
         '[TCP] --> $target match $routeLabel dial failed · '
-        '${formatDuration(DateTime.now().difference(started))} — $error',
+        '${formatDuration(watch.elapsed)} — $error',
       );
       rethrow;
     }
-    final elapsed = DateTime.now().difference(started);
+    watch.stop();
     _meter.connectionsOpened++;
-    _meter.sampleLatency(elapsed);
     ShuLog.i(
       ShuLogTag.proxy,
       '[TCP] --> $target match $routeLabel via tunnel · '
-      '${formatDuration(elapsed)}',
+      '${formatDuration(watch.elapsed)}',
     );
     return _meter.wrap(
       ATrustTcpTunnelStream(connection),
       target: target,
       routeLabel: routeLabel,
     );
+  }
+
+  /// 拨一次 aTrust 的 TCP 通道，并记下建连耗时。
+  ///
+  /// 必须带 `includeL3Preferred: true`：`ATrustConnector.dialTcp` 会把这一项
+  /// 丢掉（只转发 `resolvedIp` / `zeroRtt`），于是网关标记为「L3 优先」的资源
+  /// 全部匹配不到、直接抛 `no TCP tunnel resource for host:port` —— 一个连不上
+  /// 的站点看起来与「网关没给你开权限」完全一样，排障时无从下手。
+  ///
+  /// 两个入口都经这里：本机代理（[_openTunnelStream]）与系统 VPN 的本机终结器
+  /// （`startVpn` 里的 dialer）。
+  Future<ATrustTcpTunnelConn> _dialTunnelTcp(
+    ATrustTunnel tunnel,
+    String host,
+    int port,
+  ) => _timedDial(() => tunnel.dialTcp(host, port, includeL3Preferred: true));
+
+  /// 量一次拨号花了多久，记进 [ShuTrafficMeter.latencyMs]，再把结果原样返回。
+  ///
+  /// 计时必须贴着**拨号本身**，不能放到各自的调用方：那里要写三份一样的代码，
+  /// 而只要漏掉一份，那条数据面就永远没有这一格的数字 —— 系统 VPN 那半尤其
+  /// 明显，因为安卓出厂只开它，两个本机代理都是关的。
+  ///
+  /// 用 [Stopwatch] 而不是 `DateTime.now()`：后者是墙钟，一次 NTP 校正就能让
+  /// 差值变负，而负样本进滑动平均会把整格拉成负数。失败不记样本 —— 那量到的
+  /// 是超时值，不是这条隧道平时有多快。
+  Future<T> _timedDial<T>(Future<T> Function() dial) async {
+    final watch = Stopwatch()..start();
+    final result = await dial();
+    watch.stop();
+    _meter.sampleLatency(watch.elapsed);
+    return result;
   }
 
   /// 把域名解析成 IPv4（取第一个 A 记录），并说清没有拿到时的原因。
@@ -868,6 +903,54 @@ class ConnectionController extends ChangeNotifier {
     }
   }
 
+  /// 域名型资源 → 「地址 → 域名」的反查表，交给 TCP 终结器。
+  ///
+  /// ## 为什么必须有
+  ///
+  /// 原始包只带地址，而网关可以按**域名**发布资源（`*.shu.edu.cn`）。
+  /// 终结器拿地址去 `matchTcpRoute` 是比不中域名资源的，那条流于是被判成
+  /// 「谁都不接」而进黑洞 —— 而这正是从前本机 HTTP 代理按域名拨号解决的
+  /// 问题（`CONNECT` 请求里带的就是名字）。把域名先解成地址，反查表就能把
+  /// 地址换回名字，终结器再按名字匹配，两种数据面的行为就一致了。
+  ///
+  /// ## 两条边界
+  ///
+  /// * **通配域名跳过**：`*.shu.edu.cn` 不是一个能解析的名字，它覆盖的具体
+  ///   主机名客户端无从得知。好在按地址写的那几条授权（SHU 是整张 IPv4 表
+  ///   的 443 / 80 等端口）通常已经覆盖了同一批目标。
+  /// * **解析失败不是错误**：拿不到地址只意味着这一条要按地址匹配，不该让
+  ///   VPN 起不来，所以逐条记 DEBUG、整体不抛。
+  Future<Map<String, String>> _resolveDialHosts(ShuVpnRoutePlan plan) async {
+    final hosts = plan.domainHosts
+        .where((host) => !host.contains('*'))
+        .take(_dialHostResolveLimit)
+        .toList(growable: false);
+    if (hosts.isEmpty) return const <String, String>{};
+    final resolved = <String, List<String>>{};
+    await Future.wait<void>(
+      hosts.map((host) async {
+        try {
+          final addresses = await InternetAddress.lookup(host)
+              .timeout(const Duration(seconds: 2));
+          final ipv4 = <String>[
+            for (final address in addresses)
+              if (address.type == InternetAddressType.IPv4) address.address,
+          ];
+          if (ipv4.isNotEmpty) resolved[host] = ipv4;
+        } on Object catch (error) {
+          ShuLog.d(ShuLogTag.vpn, '反查域名 $host 失败，这一条按地址匹配：$error');
+        }
+      }),
+    );
+    return ATrustTcpTermination.reverseHosts(resolved);
+  }
+
+  /// 反查表最多解析多少条域名资源。
+  ///
+  /// 解析是**并发**跑的，所以这不是「超时 × 条数」而是一道刹车：资源表被
+  /// 网关写成几百条独立域名时，VPN 的启动不该被拖成一次批量 DNS 查询。
+  static const int _dialHostResolveLimit = 64;
+
   /// 把资源表里 SDK 认不出的**地址区间**展开成等价 CIDR（原地修改）。
   ///
   /// 网关用 `起始-结束` 授权 —— SHU 甚至用它授权整张 IPv4 表 —— 而 SDK 的
@@ -885,25 +968,6 @@ class ConnectionController extends ChangeNotifier {
       ShuLogTag.conn,
       '资源表里的地址区间已展开成 CIDR · 网关用 `起始-结束` 授权，而 SDK 的'
       '匹配器只认 CIDR · 不展开的话那几条资源拨号时会被判成 no match',
-    );
-  }
-
-  /// 实验：[SettingsStore.vpnTcpOverL3] 打开时，把每条资源的
-  /// `enableTCPPrefL3` 在本地翻成 `true`。
-  ///
-  /// 改写逻辑在 [shuForceTcpOverL3]（纯函数，有单测）；这里只负责「读设置、
-  /// 找个时机、说一句」。时机在 [_expandResourceTable] **之后**：区间展开会把
-  /// 原标志原样带到展开出来的条目上，所以先展开再翻能一次盖全。
-  void _forceTcpOverL3IfRequested(SangforConnector connector) {
-    if (!_settings.vpnTcpOverL3) return;
-    if (connector is! ATrustConnector) return;
-    final tunnel = connector.tunnel;
-    if (tunnel == null) return;
-    final changed = shuForceTcpOverL3(tunnel.resource.routes);
-    ShuLog.w(
-      ShuLogTag.conn,
-      '实验：本地把 $changed 条资源的 enableTCPPrefL3 翻成打开 · '
-      'TCP 将由 TUN 接管、不设系统代理 · 服务端是否接受要看 L3 流认证的结论',
     );
   }
 
@@ -1037,7 +1101,6 @@ class ConnectionController extends ChangeNotifier {
       _state = session.state;
       ShuLog.i(ShuLogTag.conn, '隧道已建立 · 虚拟地址 ${session.virtualAddress ?? "-"}');
       _expandResourceTable(connector);
-      _forceTcpOverL3IfRequested(connector);
       _logResourceTable(connector);
       succeeded = true;
     } on SangforException catch (error) {
@@ -1055,10 +1118,7 @@ class ConnectionController extends ChangeNotifier {
 
     if (succeeded) {
       _startStats();
-      // 三条数据面互不排斥，各自跟着自己的开关起来。
-      //
-      // 顺序有讲究：VPN 起在前面 —— 它内部会确保 HTTP 通道也已经起来
-      //（系统代理只认 HTTP），那样 HTTP 那一步就不用再判一次。
+      // 三条数据面互不排斥，各自跟着自己的开关起来，谁也不强拉谁。
       if (_settings.vpnEnabled) await startVpn();
       if (_settings.socksProxyEnabled) await startSocksProxy();
       if (_settings.httpProxyEnabled) await startHttpProxy();
@@ -1095,8 +1155,10 @@ class ConnectionController extends ChangeNotifier {
     return ok;
   }
 
-  /// 起本机 HTTP 代理。系统代理（含 `VpnService.Builder.setHttpProxy`）
-  /// 指的就是它，所以它同时是系统 VPN 的 TCP 出口。
+  /// 起本机 HTTP 代理。
+  ///
+  /// 它服务的是**只会 HTTPS 代理**的消费者（Android 的系统代理就是这一类），
+  /// 与 SOCKS5 共用同一条隧道、同一套分流判定。
   Future<bool> startHttpProxy() async {
     if (_httpProxy != null) return true;
 
@@ -1127,6 +1189,7 @@ class ConnectionController extends ChangeNotifier {
       _httpProxy = server;
       _boundHttpPort = await server.start();
       _boundHttpListen = listen;
+      _httpToken = token;
       _advertisedHost = advertised;
       ShuLog.i(
         ShuLogTag.proxy,
@@ -1139,8 +1202,8 @@ class ConnectionController extends ChangeNotifier {
       _fail(error.code, error.message);
       return false;
     } on Object catch (error) {
-      // 半启动状态比没启动更糟：`httpProxyRunning` 会说 true，而系统代理
-      // 指向的那个端口根本没人听。回滚干净再报错。
+      // 半启动状态比没启动更糟：`httpProxyRunning` 会说 true，而那个端口
+      // 根本没人听。回滚干净再报错。
       await _stopHttpProxy();
       _fail(SangforErrorCode.unknown, '启动 HTTP 代理失败：$error');
       return false;
@@ -1293,11 +1356,14 @@ class ConnectionController extends ChangeNotifier {
   ///
   /// 基线在**开始采样那一刻**取，而不是等第一次 tick —— 否则第一次的
   /// 增量会是「连接建立之前的所有字节」，界面上会闪出一个假的高峰。
+  /// 时延跟着同一时机清零：它与速率一样是「这一条连接现在怎么样」的读数，
+  /// 跨连接留着的旧值（换了网关的、上一次会话的）会让它答错。
   void _startStats() {
     _statsUpBytes = trafficUpBytes;
     _statsDownBytes = trafficDownBytes;
     _uploadRate = 0;
     _downloadRate = 0;
+    _meter.resetLatency();
     _statsTimer ??= Timer.periodic(
       const Duration(seconds: 1),
       (_) => _tickStats(),
@@ -1351,6 +1417,8 @@ class ConnectionController extends ChangeNotifier {
   Future<void> rebindSocksProxy() async {
     if (_socks5 == null) return;
     await _stopSocksProxy();
+    // 隧道在这中间断了就不重启 —— `startSocksProxy` 会报「尚未建立隧道」，
+    // 而那个错在用户看来就像「改个端口把我代理关了」。
     if (_dialer == null) return;
     await startSocksProxy();
   }
@@ -1437,9 +1505,14 @@ class ConnectionController extends ChangeNotifier {
   /// SOCKS5 只管「主动把代理地址填进来的应用」，VPN 接管全部流量。
   /// 同时开不会双份转发（SOCKS5 监听的是 loopback，不进 TUN）。
   ///
+  /// TCP 那一半由本机终结器接住：L3 数据面对 TCP 有 `enableTcpPrefL3` 那道
+  /// 硬门，网关没有逐资源打开的资源进了 TUN 只会被静默丢弃。终结器在本机
+  /// 完成握手，再按字节流转进隧道的 TCP 通道（`ATrustTcpTermination`），
+  /// 所以这一条不需要系统代理，也不需要一条并列的 HTTP 通道。
+  ///
   /// 本应用自己被排除在 VPN 之外（`addDisallowedApplication`）：隧道自己的
   /// 传输是 dart:io 的 socket，被 `0.0.0.0/0` 吸进 TUN 就会自环。代价是
-  /// 应用内 WebView（只用于登录 SSO，走公网）不经过隧道 —— 那本来也不需要。
+  /// 应用自身的流量不经过隧道 —— 登录 SSO 走公网，本来也不需要。
   Future<bool> startVpn() async {
     if (_vpnDevice != null) return true;
     if (!Platform.isAndroid) {
@@ -1456,31 +1529,6 @@ class ConnectionController extends ChangeNotifier {
     if (address == null || address.isEmpty) {
       _fail(SangforErrorCode.tunnelFailed, '网关没有下发虚拟地址，无法建立 VPN 接口');
       return false;
-    }
-
-    // 实验模式：TCP 也交给 L3，于是不需要本机 HTTP 代理、也不设系统代理。
-    final forceTcpOverL3 = _settings.vpnTcpOverL3;
-
-    // 本机代理必须先起来：系统 VPN 的 TCP 那一半完全靠它（见下面那段
-    // 关于 `l3Routes` 的注释），而 `setHttpProxy` 要填的就是它实际绑定的
-    // 端口。
-    //
-    // 这里是**强制拉起**，不看「启用 HTTP 代理」那个开关 —— HTTP 通道不是
-    // 一个可选的数据面，是系统 VPN 的依赖。那个开关管的是「不接 VPN 时
-    // 要不要也起一个 HTTP 代理」，不是「允许不允许 VPN 用它」。
-    //
-    // ⚠️ 实验模式下**跳过**这一步：那时 TCP 由 TUN 送进 L3，系统代理一个字
-    // 都不设 —— 那正是这次实验要测的东西。同时也意味着：服务端要是不接受
-    // TCP-over-L3，这台设备在连着的时候就没有 TCP 联网能力了。
-    if (!forceTcpOverL3 && _boundHttpPort == null) {
-      await startHttpProxy();
-      // `startHttpProxy` 会把失败写进错误区 —— 那是给「HTTP 代理」那个
-      // 开关看的；这里下面会用更贴合现场的话重新说一遍。
-      _clearError();
-      if (_boundHttpPort == null) {
-        _fail(SangforErrorCode.unsupported, '本机 HTTP 代理没能启动，无法把 TCP 流量送进隧道');
-        return false;
-      }
     }
 
     _busy = true;
@@ -1501,39 +1549,21 @@ class ConnectionController extends ChangeNotifier {
       // 拿目的地址去 `matchL3Route` 里找不到路由就 `return false`，而
       // `SangforTunnelRouter` 把这个返回值丢掉了 —— 包是无声消失的。
       // 全路由的后果就是把所有应用的流量都导向一个只会丢弃的黑洞。
+      //
+      // 交给系统的是 `plan.tunRoutes`，也就是**全部**可路由网段：TCP 里
+      // L3 背不动的那部分由本机终结器接住（见下），所以整张表都交得出去，
+      // 不必再像从前那样只挑「同一条网段上没有任何非 UDP 资源」的那一小撅。
       final plan = shuVpnRoutePlanFor(tunnel.resource.routes);
       ShuLog.i(ShuLogTag.vpn, plan.describe());
-
-      // 交出去的是哪些网段，看模式：
-      //
-      // 常态下是 `plan.l3Routes` —— 「同一条网段上没有任何非 UDP 资源」的
-      // 那一小部分，因为 aTrust 的 L3 数据面对 TCP 有一道
-      // `if (protocol == 'tcp' && !route.enableTcpPrefL3) continue;`，而 SHU
-      // 的网关一条都没开。把一条 TCP 也能到达的网段交给 TUN，那些地址上的
-      // TCP 会全部进黑洞：连不上、没报错、也查不出来。
-      //
-      // 实验模式下是 `plan.tunRoutes` —— **全部**可路由网段，包括 TCP
-      // 那些。那正是在验证「网关那道门到底是硬限制还是偏好」。
-      //
-      // 常态下 TCP 那一半走本机 HTTP 代理：`setHttpProxy` 把系统代理指到
-      // 我们自己的端口上，应用连的是它，它再把每一条连接挖进隧道的 TCP
-      // 通道。这才是官方客户端「全部流量走学校出口」的做法 —— 学校的授权
-      // 本来就是写给 TCP 隧道的（`1.0.0.0-255.255.255.255/tcp:443` 那种
-      // 整表授权）。
-      final routes = forceTcpOverL3 ? plan.tunRoutes : plan.l3Routes;
-      if (!forceTcpOverL3 && routes.isEmpty) {
-        // ⚠️ 这句以前写成「网关没有只给 UDP 的网段」，那是**错的**：
-        // SHU 的网关确实下发了 `10.10.0.116/udp:53` 和
-        // `202.120.119.224-254/udp` 这些只给 UDP 的段，但它们**都落在**
-        // `1.0.0.0-255.255.255.255/tcp:…` 那三条整表授权里面。而 TUN 的路由
-        // 是按地址下发的、认不出协议 —— 交出去就等于把那些地址上的 TCP
-        // 一起送进黑洞。所以是「被压住」而不是「不存在」。
+      final routes = plan.tunRoutes;
+      if (routes.isEmpty) {
+        // 网关只下发了域名型资源时路由表是空的 —— 域名没法变成路由。
+        // 这不是故障：本机 SOCKS5 代理仍然能按域名访问它们，所以只记一行，
+        // 不拦着连接。
         ShuLog.i(
           ShuLogTag.vpn,
-          'TUN 不接管任何路由：网关把整张 IPv4 表的 TCP 都授权了'
-          '（`1.0.0.0-255.255.255.255/tcp:80-90,443,8000-9001`），而路由认不出'
-          '协议 —— 交出任何一段都会把那里的 TCP 送进黑洞。'
-          'TCP 全部走本机 HTTP 代理，UDP 走底层网络',
+          'TUN 不接管任何路由：网关下发的资源里没有 IP 网段（全是域名）。'
+          '系统 VPN 这一条什么也接管不到，那些目标只能靠本机 SOCKS5 代理访问',
         );
       }
 
@@ -1556,18 +1586,56 @@ class ConnectionController extends ChangeNotifier {
         }
       }
 
+      // TCP 终结器：aTrust 的 L3 数据面对 TCP 有一道硬门 ——
+      //
+      // ```dart
+      // if (protocol == 'tcp' && !route.enableTcpPrefL3) continue;
+      // ```
+      //
+      // 而 SHU 的网关一条都没开。那些 TCP 进了 TUN 只会被 `sendPacket` 静默
+      // 丢弃（它返回 false，而 `SangforTunnelRouter` 不看返回值），表现出来
+      // 就是「VPN 开着，浏览器却什么都打不开」。
+      //
+      // 依赖包给出的答案是在**本机**把这些流终结掉，再按字节流转进隧道的
+      // TCP 通道（[ATrustTcpTermination]）：本机协议栈与终结器完成握手，
+      // 它去拨 `dialTcp`，字节双向拷贝。于是系统 VPN 这一半不需要系统代理
+      // 就能背 TCP（本机那两条 HTTP / SOCKS5 代理是并列的另外两条通道，
+      // 服务的是「自己会把代理地址填进去」的应用，与这里无关）。
+      //
+      // 按域名发布的资源要能反查出名字才会被终结器认下（原始包只带地址），
+      // 所以先把域名解成地址，见 [_resolveDialHosts]。
+      final dialHosts = await _resolveDialHosts(plan);
+      final termination = ATrustTcpTermination(
+        resource: tunnel.resource,
+        dialHosts: dialHosts,
+      );
+      // 终结器在这里自己造，而不是走 `ATrustTcpTermination.terminator()`：
+      // 接收窗口是**用户能改的那一格**（实验性选项 → TCP 接收窗口缩放），
+      // 而那个工厂方法写死了库的默认值。流判定仍然用它的。
+      //
+      // 拨号也自己接：那一步是这一格里唯一能计时的位置（见 [_dialTunnelTcp]）。
+      // 走 `termination.dial` 的话，系统 VPN 这一半就永远没有时延数字 ——
+      // 而安卓出厂只开这一半，两个本机代理都是关的。
+      final windowScaling = _settings.vpnTcpWindowScaling;
+      final terminator = SangforTcpTerminator(
+        dialer: (host, port) async =>
+            ATrustTcpTunnelStream(await _dialTunnelTcp(tunnel, host, port)),
+        shouldTerminate: termination.shouldTerminate,
+        dialHostResolver: termination.dialHost,
+        maximumSegmentSize: termination.maximumSegmentSize,
+        advertisedWindow: windowScaling
+            ? sangforTcpScaledWindow
+            : sangforTcpUnscaledWindow,
+        windowScale: windowScaling ? sangforTcpWindowScaleShift : 0,
+        onError: (error) => ShuLog.w(ShuLogTag.vpn, 'TCP 终结器出错：$error'),
+      );
+
       final device = await ShuAndroidVpn.start(
         address: address,
         prefixLength: 32,
         mtu: _settings.vpnMtu,
         routes: routes,
         dnsServers: dns,
-        // 把系统代理指到本机的 HTTP 通道上 —— 常态下这是应用们的 TCP 能进
-        // 隧道的唯一入口（见上面关于 `routes` 的那段）。
-        //
-        // 实验模式下传 `0`，原生侧于是**一个字都不设** —— 那时 TCP 走 TUN。
-        httpProxyHost: _systemProxyHost,
-        httpProxyPort: forceTcpOverL3 ? 0 : _boundHttpPort,
         notificationTitle: ShuAppInfo.name,
         disconnectLabel: '断开',
       );
@@ -1579,40 +1647,49 @@ class ConnectionController extends ChangeNotifier {
       _vpnTunnelRoutes = routes;
 
       // 观测器包在隧道外面，拿得到 `sendPacket` 的真实返回值。
-      // 资源表直接交进去 —— 它要拿同一张表复现 SDK 的路由判定，
-      // 好把「命中 / 资源表外 / TCP 走不了 L3」分开说。
-      final observer = ShuPacketObserver(routes: tunnel.resource.routes);
+      // 资源表直接交进去 —— 它要拿同一张表复现 SDK 的路由判定，好把
+      // 「命中 / 资源表外 / 交给终结器 / 谁都不接」分开说。
+      final observer = ShuPacketObserver(
+        routes: tunnel.resource.routes,
+        terminatesTcp: termination.shouldTerminate,
+      );
       _vpnObserver = observer;
 
       final token = SangforCancellationToken();
-      final router = SangforTunnelRouter(
-        cancellationToken: token,
-        // 逐包日志已经在 observer 里带着目的地记过了，这里只留一条
-        // 兜底的链路级错误。
-        onError: (error) => ShuLog.w(ShuLogTag.vpn, 'VPN 转发链路出错：$error'),
-      )..start(device: device, tunnel: _TunnelPacketAdapter(tunnel, observer));
+      final router =
+          SangforTunnelRouter(
+            cancellationToken: token,
+            // 逐包日志已经在 observer 里带着目的地记过了，这里只留一条
+            // 兜底的链路级错误。
+            onError: (error) => ShuLog.w(ShuLogTag.vpn, 'VPN 转发链路出错：$error'),
+          )..start(
+            device: device,
+            // 终结器包在隧道外面：它先挑走 L3 背不动的那些 TCP 流，剩下的原样
+            // 交给隧道当裸 IP 转发，而它自己合成的包混进 `incoming`。
+            tunnel: _TunnelPacketAdapter(
+              SangforTerminatingTunnel(
+                inner: ATrustPacketTunnel(tunnel),
+                terminator: terminator,
+              ),
+              observer,
+            ),
+          );
       _vpnDevice = device;
       _vpnRouter = router;
       _vpnToken = token;
+      _vpnTerminator = terminator;
       _vpnDisconnectSub = ShuAndroidVpn.disconnectRequests.listen((_) {
         ShuLog.i(ShuLogTag.vpn, '通知栏请求断开');
         unawaited(disconnect());
       });
       ShuLog.i(
         ShuLogTag.vpn,
-        'VPN 已启动 $address/32 · ${forceTcpOverL3 ? "TUN 路由" : "L3 路由"} '
-        '${routes.length} 条 · MTU ${_settings.vpnMtu} · '
+        'VPN 已启动 $address/32 · TUN 路由 ${routes.length} 条 · '
+        'MTU ${_settings.vpnMtu} · '
         'DNS ${dns.isEmpty ? "底层网络" : dns.join(", ")} · '
-        '系统 HTTP 代理 ${forceTcpOverL3 ? "未设置" : "$_systemProxyHost:${_boundHttpPort ?? "-"}"}',
+        'TCP 由本机终结器接管（L3 背得动的仍走 L3）· '
+        'TCP 窗口 ${windowScaling ? "1 MiB（缩放）" : "64 KB（不缩放）"}',
       );
-      if (forceTcpOverL3) {
-        ShuLog.w(
-          ShuLogTag.vpn,
-          '实验模式：TCP 与 UDP 全部交给 TUN，系统代理未设置 · '
-          '若服务端不接受 TCP-over-L3，浏览器会打不开任何页面 —— '
-          '那正是本次要验证的结论，看 L3 流认证的日志',
-        );
-      }
       // 单独一行说地址族：这是「接口建好了但一个包都不进 TUN」的真因，
       // 而它不在上面那一行里看不出任何异常。
       ShuLog.i(
@@ -1644,10 +1721,20 @@ class ConnectionController extends ChangeNotifier {
     _vpnToken = null;
     final sub = _vpnDisconnectSub;
     _vpnDisconnectSub = null;
+    final terminator = _vpnTerminator;
+    _vpnTerminator = null;
     final observer = _vpnObserver;
     _vpnObserver = null;
     await sub?.cancel();
     token?.cancel('vpn stopped');
+    // 终结器先停：它持有的那几条连接会一直往隧道里读字节，而出口马上就
+    // 不在了。它只拆自己的会话，**不碰**底层隧道 —— 那条隧道的生命周期
+    // 属于 connector（SOCKS5 还可能在用它）。
+    try {
+      await terminator?.close();
+    } on Object catch (error) {
+      ShuLog.w(ShuLogTag.vpn, '停止 TCP 终结器时出错：$error');
+    }
     try {
       await router?.stop();
     } on Object catch (error) {
@@ -1742,12 +1829,12 @@ class ConnectionController extends ChangeNotifier {
   }
 }
 
-/// 把 [ATrustTunnel] 适配成 [SangforTunnelRouter] 要的 [SangforPacketTunnel]，
-/// 并在中间穿上逐包观测。
+/// 在包设备与隧道之间穿上逐包观测。
 ///
-/// SDK 里 `ATrustTunnel` 的成员与 `SangforPacketTunnel` 逐项对得上
-/// （`incoming` / `isClosed` / `sendPacket` / `close`），但它**没有声明
-/// `implements`**，所以不能直接传过去。
+/// 它拿到的已经是一个 [SangforPacketTunnel] —— 服务 aTrust 时那个就是
+/// [SangforTerminatingTunnel]（终结器包在裸 IP 隧道外面），而不是裸的
+/// `ATrustTunnel`：SDK 里那个类的成员与 [SangforPacketTunnel] 逐项对得上
+/// 但没有声明 `implements`，而终结器自带这一层适配。
 ///
 /// 观测为什么放在这里而不是 `SangforTunnelRouter` 的过滤器上：
 ///
@@ -1763,7 +1850,7 @@ class ConnectionController extends ChangeNotifier {
 class _TunnelPacketAdapter implements SangforPacketTunnel {
   _TunnelPacketAdapter(this._tunnel, this._observer);
 
-  final ATrustTunnel _tunnel;
+  final SangforPacketTunnel _tunnel;
   final ShuPacketObserver _observer;
 
   @override

@@ -575,9 +575,7 @@ class _ConnectionDrawerState extends State<_ConnectionDrawer> {
     final locked = controller.busy || connected;
     final selected = controller.draft.protocol;
 
-    // 只列「设置里开着」或者「此刻真的在跑」的通道。后半句不是冗余：系统
-    // VPN 会把 HTTP 通道**强制**拉起来（它的 TCP 那半边全靠它），那种时候
-    // 即使 `httpProxyEnabled` 是关的，那个地址也确实是系统代理指向的地方。
+    // 只列「设置里开着」或者「此刻真的在跑」的通道。
     final channels = <Widget>[
       if (settings.httpProxyEnabled || controller.httpProxyRunning)
         _DrawerRow(

@@ -14,8 +14,9 @@
 /// | 结论 | 原因 | 谁来丢的 |
 /// | :--- | :--- | :--- |
 /// | [ShuPacketVerdict.routed] | 五元组命中资源表 | —— 交给对应节点组 |
+/// | [ShuPacketVerdict.terminated] | TCP 命中资源，而 L3 不背 TCP | —— 本机终结器接住，转进 TCP 隧道 |
 /// | [ShuPacketVerdict.unroutable] | 目的地址压根不在资源表里 | 隧道静默丢弃 |
-/// | [ShuPacketVerdict.tcpNotL3] | TCP 命中了资源，但那条资源没开 `enableTcpPrefL3` | 隧道静默丢弃 |
+/// | [ShuPacketVerdict.tcpNotL3] | TCP 命中了资源，那条资源没开 `enableTcpPrefL3`，终结器也没接 | 隧道静默丢弃 |
 ///
 /// ## 四个等级各写什么
 ///
@@ -52,6 +53,13 @@ enum ShuPacketVerdict {
   /// 命中资源表 —— `sendPacket` 会把它交给对应的节点组。
   routed('match'),
 
+  /// TCP 命中了资源、L3 隧道却不背，于是被**本机终结器**接住。
+  ///
+  /// 它不是丢包：终结器在本机完成握手，再把字节流转进隧道的 TCP 通道
+  /// （见 `ATrustTcpTermination`）。单独列一档，是因为在此之前这一类包写
+  /// 的是 `no l3, dropped` —— 那句话在终结器接管的时代只会误导人。
+  terminated('relay'),
+
   /// 目的地址不在网关下发的资源表里。
   unroutable('no match'),
 
@@ -80,11 +88,12 @@ enum ShuPacketVerdict {
   /// 日志里那一列的中文说法。
   final String label;
 
-  /// 这个结论意味着包会被隧道丢掉吗。
+  /// 这个结论意味着包会被丢掉吗。
   ///
   /// [unroutable] 与 [tcpNotL3] 都是丢包，但原因不同 —— 计数只要一个数，
-  /// 日志里才需要分开说。
-  bool get dropped => this != ShuPacketVerdict.routed;
+  /// 日志里才需要分开说。[terminated] 不是丢包：终结器把它接住了。
+  bool get dropped =>
+      this == ShuPacketVerdict.unroutable || this == ShuPacketVerdict.tcpNotL3;
 }
 
 /// 一条流（五元组，双向共用一条）的账本。
@@ -146,9 +155,19 @@ class ShuPacketFlow {
 class ShuPacketObserver {
   ShuPacketObserver({
     required List<ATrustRoute> routes,
+    this.terminatesTcp,
     DateTime Function()? clock,
   }) : _routes = List<ATrustRoute>.unmodifiable(routes),
        _now = clock ?? DateTime.now;
+
+  /// TCP 终结器会不会接走这条流（`ATrustTcpTermination.shouldTerminate`）。
+  ///
+  /// 它存在的理由是**日志要诚实**：被终结器接走的 TCP 流在 L3 这一侧看就是
+  /// 「命中了资源但隧道不背」，从前会被写成 `no l3, dropped` —— 而它实际上
+  /// 一个字节都没丢。传 `null` 表示这一层没有终结器，判定就到 `tcpNotL3`
+  /// 为止。
+  final bool Function(String destinationAddress, int destinationPort)?
+  terminatesTcp;
 
   /// 流表的条数上限。
   ///
@@ -362,12 +381,20 @@ class ShuPacketObserver {
           '[${flow.protocol}] ${flow.label} match ${shuRouteLabel(route!)} '
           'via tunnel',
         );
+      case ShuPacketVerdict.terminated:
+        // 不是故障，所以是 INFO 而不是 WARN：包没丢，只是换了一条通道 ——
+        // 本机终结器完成握手，再按字节流转进隧道的 TCP 通道。
+        ShuLog.i(
+          ShuLogTag.packet,
+          '[TCP] ${flow.label} relay ${shuRouteLabel(route!)} via TCP tunnel',
+        );
       case ShuPacketVerdict.tcpNotL3:
         ShuLog.w(
           ShuLogTag.packet,
           '[TCP] ${flow.label} no l3, dropped · 命中的资源 '
-          '${shuRouteLabel(route!)} 未开 enableTcpPrefL3，L3 隧道不背 TCP。'
-          '本机代理会接管这一条',
+          '${shuRouteLabel(route!)} 未开 enableTcpPrefL3，L3 隧道不背 TCP，'
+          '而本机终结器也没能匹配到它 —— 按域名发布的资源要能反查出名字'
+          '（`ConnectionController._resolveDialHosts`）才会被接管',
         );
       case ShuPacketVerdict.unroutable:
         ShuLog.w(
@@ -469,7 +496,14 @@ class ShuPacketObserver {
         : null;
     final verdict = switch ((route, explained)) {
       (final ATrustRoute _, _) => ShuPacketVerdict.routed,
-      (null, final ATrustRoute _) => ShuPacketVerdict.tcpNotL3,
+      (null, final ATrustRoute _) =>
+        terminatesTcp?.call(
+                  canonical.destinationAddress,
+                  canonical.destinationPort,
+                ) ==
+                true
+            ? ShuPacketVerdict.terminated
+            : ShuPacketVerdict.tcpNotL3,
       _ => ShuPacketVerdict.unroutable,
     };
 

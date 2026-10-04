@@ -69,32 +69,25 @@ class ShuAndroidVpn {
 
   /// 起服务、建 TUN，返回包设备；没有授权或建立失败时返回 `null`。
   ///
-  /// [routes] 决定**哪些流量会被系统交给这条隧道**。它必须是网关资源表里
-  /// 的网段（见 `vpn_routes.dart`），**不能是 `0.0.0.0/0`** —— 隧道只会转发
-  /// 落在资源表里的包，其余的会被静默丢掉，全路由等于把所有流量引向黑洞。
+  /// [routes] 决定**哪些流量会被系统交给这条隧道**。它必须是网关资源表
+  /// 展开后的网段（见 `vpn_routes.dart`），**不能是 `0.0.0.0/0`** —— 隧道
+  /// 只会转发落在资源表里的包，其余的会被静默丢掉，全路由等于把所有流量
+  /// 引向黑洞。
+  ///
+  /// 交给 TUN 的是资源表的**全部**网段，而不是「L3 背得动的那一部分」：
+  /// aTrust 的 L3 数据面对 TCP 有一道 `enableTcpPrefL3` 的硬门，而 TUN 的
+  /// 路由按目的地址分流、认不出协议。那些 TCP 由 Dart 侧的终结器在本机
+  /// 接住（见 `connection_controller.dart` 的 `startVpn`），所以这一层不再
+  /// 需要挑子集，也不设任何系统代理。
   ///
   /// [dnsServers] 是期望**走隧道**的 DNS（用户手填的，或网关下发且落在
   /// [routes] 内的）。原生侧一定会再追加底层网络那一组当兜底。
-  ///
-  /// [routes] 决定**哪些流量会被系统交给这条隧道**。它必须是**隧道真的
-  /// 背得动**的那些网段（见 `ShuVpnRoutePlan.l3Routes`），而不是资源表的
-  /// 全部：aTrust 的 L3 数据面对 TCP 有一道 `enableTcpPrefL3` 的硬门，
-  /// 交给 TUN 的网段里只要有人做 TCP，那些 TCP 就会被静默丢弃。
-  ///
-  /// [httpProxyHost] / [httpProxyPort] 是**本机 HTTP 代理**的地址，会被写进
-  /// 系统代理设置。应用们与隧道的 TCP 那一半就靠它 —— `VpnService` 的路由
-  /// 按地址分流、认不出协议，TCP 进 TUN 只会进黑洞。
-  ///
-  /// 主机默认 `127.0.0.1`：系统代理是填给所有应用的，而应用都在本机发起
-  /// 连接。只有当监听地址被限定在某一张具名网卡上时才会换成那个地址。
   static Future<ShuAndroidVpnDevice?> start({
     required String address,
     int prefixLength = 32,
     int mtu = 0,
     List<String> routes = const <String>[],
     List<String> dnsServers = const <String>[],
-    String httpProxyHost = '127.0.0.1',
-    int? httpProxyPort,
     String notificationTitle = 'ShuVPN',
     String disconnectLabel = '断开',
   }) async {
@@ -104,8 +97,6 @@ class ShuAndroidVpn {
       'mtu': mtu,
       'routes': routes,
       'dnsServers': dnsServers,
-      'httpProxyHost': httpProxyHost,
-      'httpProxyPort': httpProxyPort ?? 0,
       'notificationTitle': notificationTitle,
       'disconnectLabel': disconnectLabel,
     });

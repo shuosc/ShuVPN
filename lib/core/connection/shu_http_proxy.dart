@@ -12,8 +12,7 @@ import '../logging/shu_log.dart';
 /// ## 为什么除了 SOCKS5 还要这一个
 ///
 /// Android 的**系统代理只支持 HTTP**：设置里的「WLAN → 代理」只有 HTTP 一个
-/// 选项，`VpnService.Builder.setHttpProxy` 收的也是 `ProxyInfo`（HTTP）。
-/// 没有任何系统开关能把「所有应用都用 SOCKS5」这件事表达出来 ——
+/// 选项。没有任何系统开关能把「所有应用都用 SOCKS5」这件事表达出来 ——
 /// 于是把浏览器指向一个 SOCKS5 端口，结果就是**一个连接都不会进来**：
 /// 那一侧从来不知道要去连它。这不是 SOCKS5 实现的问题，是平台的表达力问题。
 ///
@@ -21,12 +20,16 @@ import '../logging/shu_log.dart';
 ///
 /// | 通道 | 谁在用 |
 /// | :--- | :--- |
-/// | HTTP（本文件） | 系统/`setHttpProxy` 注入 → 绝大多数应用、浏览器 |
+/// | HTTP（本文件） | 只会填 HTTP(S) 代理的应用（含手动设的系统代理） |
 /// | SOCKS5 | 自己支持 SOCKS5 的应用（Firefox、Telegram、部分命令行工具） |
 ///
 /// 两者**共用同一个 [SangforTcpDialer]**，也就是共用同一条隧道、同一套
 /// 分流判定（`_dialATrust`），所以「哪个目标走隧道、哪个直连」在两边的答案
 /// 一定一样。
+///
+/// ⚠️ 这条通道**不是**系统 VPN 的出口：VPN 那一半的 TCP 由库里的本机终结器
+/// 逐流接管（`ATrustTcpTermination`），所以它不需要谁去当系统代理，也不会
+/// 把这条通道强制拉起来。
 ///
 /// ## 支持哪些请求
 ///
@@ -63,9 +66,9 @@ class ShuHttpProxy {
 
   /// 绑定监听，返回真正绑上的端口。
   ///
-  /// 首选 [port]，被占用时**退到系统分配的端口**。退一步是故意的：这条
-  /// HTTP 通道是系统 VPN 里 TCP 的唯一出口（见类文档），「相邻端口恰好被
-  /// 别的程序占着」不该是整条代理起不来的理由。
+  /// 首选 [port]，被占用时**退到系统分配的端口**。退一步是故意的：「相邻
+  /// 端口恰好被别的程序占着」不该是整条代理起不来的理由 —— 端口退到哪里，
+  /// 界面上的地址就跟着显示哪里（`httpListenAddress`）。
   Future<int> start() async {
     if (_server != null) throw StateError('HTTP proxy is already running');
     final address = listenAddress ?? InternetAddress.loopbackIPv4;

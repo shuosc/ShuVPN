@@ -62,8 +62,43 @@ void main() {
       expect(warn.level, ShuLogLevel.warn);
       // 这一句是整条链路上最值钱的诊断：现象和「没权限」一样，原因不同。
       expect(warn.message, contains('enableTcpPrefL3'));
-      expect(warn.message, contains('本机代理'));
-      // 算进丢弃计数 —— 它确实会被隧道丢掉。
+      expect(warn.message, contains('终结器'));
+      // 算进丢弃计数 —— 它确实会被丢掉。
+      expect(observer.unroutablePackets, 1);
+    });
+
+    test('同一条流被 TCP 终结器接走 —— 报成 relay，不算丢包', () async {
+      final observer = ShuPacketObserver(
+        routes: <ATrustRoute>[_tcpRoute(host: '10.1.0.0/16', l3: false)],
+        terminatesTcp: (address, port) => port == 443,
+      );
+
+      // 被终结器接住的包在数据面上是「发出去了」—— 终结器返回 true。
+      await observer.observeEgress(
+        _tcp(destination: '10.1.2.3', destinationPort: 443),
+        () async => true,
+      );
+
+      final line = _lines().first;
+      expect(line.level, ShuLogLevel.info);
+      expect(line.message, contains('relay'));
+      expect(line.message, contains('via TCP tunnel'));
+      // **不是丢包**：它只是换了一条通道。
+      expect(observer.unroutablePackets, 0);
+    });
+
+    test('终结器不接的端口仍然按 tcpNotL3 报', () async {
+      final observer = ShuPacketObserver(
+        routes: <ATrustRoute>[_tcpRoute(host: '10.1.0.0/16', l3: false)],
+        terminatesTcp: (address, port) => port == 443,
+      );
+
+      await observer.observeEgress(
+        _tcp(destination: '10.1.2.3', destinationPort: 8443),
+        () async => false,
+      );
+
+      expect(_lines().first.level, ShuLogLevel.warn);
       expect(observer.unroutablePackets, 1);
     });
 
