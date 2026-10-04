@@ -164,9 +164,7 @@ class _ShuConnectionSettingsPageState extends State<ShuConnectionSettingsPage> {
           SettingsRow(
             icon: Icons.lan_outlined,
             title: '${channel.label} 监听地址',
-            // 显示「名字 · 地址」而不是只显示名字：这一行是用户确认
-            // 「现在到底绑在哪张网卡」的唯一地方。
-            value: channel.listenIn(settings).display,
+            value: channel.listenIn(settings).address,
             enabled: editable,
             onTap: () => _editListen(settings, connection, channel),
           ),
@@ -311,9 +309,6 @@ class _ShuConnectionSettingsPageState extends State<ShuConnectionSettingsPage> {
       title: '${channel.label} 监听地址',
       label: '绑定地址',
       initial: current.address,
-      helper:
-          '只能填 IP 地址。127.0.0.1 = 仅本机，0.0.0.0 = 所有网卡，'
-          '也可以填某一张网卡上的地址。',
       validate: (raw) =>
           ShuProxyListen.parse(raw) == null ? '请填一个 IP 地址，例如 127.0.0.1' : null,
     );
@@ -429,7 +424,6 @@ class _ShuConnectionSettingsPageState extends State<ShuConnectionSettingsPage> {
       title: 'DNS',
       label: '服务器地址',
       initial: settings.vpnDns,
-      helper: '留空则回到「跟随系统」；填了的地址会跟着隧道一起走',
       validate: (value) {
         if (value.isEmpty) return null;
         final octets = value.split('.');
@@ -495,7 +489,6 @@ class _PortDialogState extends State<_PortDialog> {
             keyboardType: TextInputType.number,
             decoration: const InputDecoration(
               labelText: '端口',
-              helperText: '0 表示自动选择空闲端口',
               border: OutlineInputBorder(),
             ),
             onSubmitted: (_) => _submit(),

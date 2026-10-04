@@ -114,7 +114,6 @@ class ShuATrustSettingsPage extends StatelessWidget {
       title: '服务器地址',
       label: '域名或 IP',
       initial: settings.server,
-      helper: '不需要写 https://，协议固定为 HTTPS',
       validate: (value) {
         if (value.isEmpty) return '不能为空';
         if (value.contains(' ')) return '不能包含空格';
@@ -134,7 +133,6 @@ class ShuATrustSettingsPage extends StatelessWidget {
       title: '登录域',
       label: 'sfDomain',
       initial: settings.loginDomain,
-      helper: '由网关的 authConfig 下发，改错了会连不上',
       validate: (value) => value.isEmpty ? '不能为空' : null,
     );
     if (value == null) return;

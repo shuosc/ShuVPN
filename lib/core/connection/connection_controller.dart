@@ -1193,7 +1193,7 @@ class ConnectionController extends ChangeNotifier {
       _advertisedHost = advertised;
       ShuLog.i(
         ShuLogTag.proxy,
-        'HTTP 代理已监听 ${listen.address}:$_boundHttpPort · ${listen.label}'
+        'HTTP 代理已监听 ${listen.address}:$_boundHttpPort'
         '${advertised == null ? '' : ' · 同网络设备连 $advertised:$_boundHttpPort'}',
       );
       return true;
@@ -1254,7 +1254,7 @@ class ConnectionController extends ChangeNotifier {
       _advertisedHost = advertised;
       ShuLog.i(
         ShuLogTag.proxy,
-        'SOCKS5 代理已监听 ${listen.address}:$port · ${listen.label}'
+        'SOCKS5 代理已监听 ${listen.address}:$port'
         '${advertised == null ? '' : ' · 同网络设备连 $advertised:$port'}',
       );
       return true;

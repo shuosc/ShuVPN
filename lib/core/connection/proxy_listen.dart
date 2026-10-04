@@ -24,8 +24,8 @@ import 'dart:io';
 /// 字面量**（不接受主机名 —— 那需要一次 DNS 查询，而绑定发生在代理启动
 /// 的那条路径上）。
 ///
-/// 两个预设仍然保留成常量：它们是用户最常用的两个值，界面上直接给出来
-/// 比让人手打一遍好。它们也是 `test/` 与界面之外唯一需要认识的名字。
+/// 两个预设仍然保留成常量：`loopback` 是出厂默认，`anyNetwork` 是「开放给
+/// 同网络」的常用写法。
 class ShuProxyListen {
   const ShuProxyListen._(this.address);
 
@@ -63,25 +63,6 @@ class ShuProxyListen {
   /// 回退到最保守的回环比回退到 `0.0.0.0` 安全。
   InternetAddress get internetAddress =>
       InternetAddress.tryParse(address) ?? InternetAddress.loopbackIPv4;
-
-  /// 设置行上显示的名字。
-  ///
-  /// 非预设的地址直接显示地址本身：那时「这是哪一台机器」正是用户唯一想
-  /// 确认的事，再起一个名字反而把它挡住了。
-  String get label => switch (address) {
-    '127.0.0.1' => '仅本机',
-    '0.0.0.0' => '所有网卡',
-    '::' => '所有网卡 (IPv6)',
-    _ => address,
-  };
-
-  /// 设置行上的完整取值：名字 + 地址，两个都要有。
-  ///
-  /// 只写名字（「仅本机」）看不出它其实是 `127.0.0.1`；只写地址又要在
-  /// 「`0.0.0.0` 是什么」上想一下。这一行是用户确认「现在到底绑在哪」的
-  /// 唯一地方，所以两个都给。
-  String get display =>
-      isLoopback || allInterfaces ? '$label · $address' : address;
 
   /// 解析用户填的文本。不是能绑定的字面地址时返回 `null`。
   ///

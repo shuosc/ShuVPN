@@ -301,7 +301,6 @@ Future<String?> showShuTextPrompt({
   required String title,
   required String label,
   required String initial,
-  String? helper,
   String? Function(String value)? validate,
 }) {
   return showDialog<String>(
@@ -310,7 +309,6 @@ Future<String?> showShuTextPrompt({
       title: title,
       label: label,
       initial: initial,
-      helper: helper,
       validate: validate,
     ),
   );
@@ -321,14 +319,12 @@ class _ShuTextPromptDialog extends StatefulWidget {
     required this.title,
     required this.label,
     required this.initial,
-    this.helper,
     this.validate,
   });
 
   final String title;
   final String label;
   final String initial;
-  final String? helper;
   final String? Function(String value)? validate;
 
   @override
@@ -374,7 +370,6 @@ class _ShuTextPromptDialogState extends State<_ShuTextPromptDialog> {
             onSubmitted: (_) => _submit(),
             decoration: InputDecoration(
               labelText: widget.label,
-              helperText: widget.helper,
               border: const OutlineInputBorder(),
             ),
           ),

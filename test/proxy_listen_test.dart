@@ -85,16 +85,6 @@ void main() {
     });
   });
 
-  group('显示', () {
-    test('预设显示「名字 · 地址」，自定义地址直接显示地址', () {
-      expect(ShuProxyListen.loopback.label, '仅本机');
-      expect(ShuProxyListen.loopback.display, '仅本机 · 127.0.0.1');
-      expect(ShuProxyListen.anyNetwork.display, '所有网卡 · 0.0.0.0');
-      expect(ShuProxyListen.parse('192.168.99.144')!.label, '192.168.99.144');
-      expect(ShuProxyListen.parse('192.168.99.144')!.display, '192.168.99.144');
-    });
-  });
-
   group('fromStored', () {
     test('读回地址本身', () {
       expect(ShuProxyListen.fromStored('10.0.0.2').address, '10.0.0.2');

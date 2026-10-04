@@ -10,12 +10,15 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shuvpn/app/app.dart';
+import 'package:shuvpn/app/app_info.dart';
 import 'package:shuvpn/app/theme.dart';
 import 'package:shuvpn/core/auth/auth_constants.dart';
 import 'package:shuvpn/core/connection/connection_controller.dart';
 import 'package:shuvpn/core/connection/protocol.dart';
 import 'package:shuvpn/core/logging/shu_log.dart';
 import 'package:shuvpn/core/settings/settings_store.dart';
+import 'package:shuvpn/core/update/shu_update_client.dart';
+import 'package:shuvpn/core/update/shu_update_info.dart';
 import 'package:shuvpn/features/connect/connect_page.dart';
 import 'package:shuvpn/features/settings/connection_settings_page.dart';
 import 'package:shuvpn/features/settings/experimental_settings_page.dart';
@@ -26,10 +29,13 @@ import 'package:shuvpn/widgets/settings_scaffold.dart';
 import 'package:shuvpn/widgets/shu_app_bar.dart';
 import 'package:shuvpn/widgets/shu_surfaces.dart';
 
+import 'shu_update_stub.dart';
+
 Future<void> _pumpApp(
   WidgetTester tester, {
   Size physical = const Size(720, 3600),
   double dpr = 2,
+  ShuUpdateClient? updateClient,
 }) async {
   // A tall phone viewport. The shell is laid out for a phone, and a tall one
   // keeps below-the-fold rows built so assertions do not need scroll
@@ -44,7 +50,14 @@ Future<void> _pumpApp(
   // **之后**的界面。模拟一位已经走完引导的用户，比在每个用例里绕过重定向
   // 干净：这层判断正好也是引导唯一的长期痕迹。
   settings.welcomeCompleted = true;
-  await tester.pumpWidget(ShuVpnApp(settings: settings));
+  // 启动路径每次都会查一次更新。装上不发请求的替身，默认「已经是最新」，
+  // 于是除了专门测更新弹窗的用例，其它用例上不会多出任何东西。
+  await tester.pumpWidget(
+    ShuVpnApp(
+      settings: settings,
+      updateClient: updateClient ?? StubShuUpdateClient(),
+    ),
+  );
   await tester.pump();
 }
 
@@ -750,11 +763,20 @@ void main() {
     }
 
     await _openSettings(tester, '关于ShuVPN');
-    // The page is two groups of rows; the group titles carry the structure
-    // (there is no card around either group).
+    // The page is three groups of rows; the group titles carry the structure
+    // (there is no card around either group). 「支持」里只剩「检查更新」
+    // —— 更新源是 GitHub 上的 APK 发布，而测试环境的默认平台就是安卓。
     expect(find.text('项目信息'), findsOneWidget);
     expect(find.text('隐私与声明'), findsOneWidget);
-    for (final entry in <String>['源代码', '开源许可', '第三方开源许可', '贡献者', '权限说明']) {
+    expect(find.text('支持'), findsOneWidget);
+    for (final entry in <String>[
+      '源代码',
+      '开源许可',
+      '第三方开源许可',
+      '贡献者',
+      '权限说明',
+      '检查更新',
+    ]) {
       expect(find.text(entry), findsOneWidget, reason: '$entry 应该有一行');
     }
     // The licence row states the licence but goes nowhere, so it is the only
@@ -770,7 +792,7 @@ void main() {
       findsNothing,
     );
     // Every remaining row opens something, so none of them may be a dead end.
-    expect(find.byIcon(Icons.chevron_right), findsNWidgets(4));
+    expect(find.byIcon(Icons.chevron_right), findsNWidgets(5));
     // The mark is the launcher tile itself, not an icon-font glyph — the
     // rounded square plus its shadow only reads as an app icon with the opaque
     // blue tile behind the white mark.
@@ -783,6 +805,50 @@ void main() {
     );
   });
 
+  testWidgets('the update row exists on Android only', (tester) async {
+    // 测试环境的默认平台就是安卓，所以换一个平台才看得到「它不出现」。
+    // 用 variant 而不是 `addTearDown` 复位：框架把「调试变量被改过」当成
+    // 用例失败，而它在 tearDown 之前就检查了。
+    await _pumpApp(tester);
+    await _openSettings(tester, '关于ShuVPN');
+
+    expect(find.text('支持'), findsNothing);
+    expect(find.text('检查更新'), findsNothing);
+  }, variant: TargetPlatformVariant.only(TargetPlatform.iOS));
+
+  testWidgets('a newer release opens the update prompt as the shell comes up', (
+    tester,
+  ) async {
+    final client = StubShuUpdateClient(
+      result: const ShuUpdateInfo(
+        latestVersion: '99.0.0',
+        downloadUrl: 'https://example.com/ShuVPN.apk',
+        releasePageUrl: 'https://example.com/releases',
+      ),
+    );
+
+    await _pumpApp(tester, updateClient: client);
+    await tester.pumpAndSettle();
+
+    expect(find.text('发现新版本'), findsOneWidget);
+    expect(find.text('当前版本：${ShuAppInfo.version}'), findsOneWidget);
+    expect(find.text('最新版本：99.0.0'), findsOneWidget);
+    // 拿来比对的必须是应用自己的版本，不能是某个写死的数。
+    expect(client.requestedVersions, <String>[ShuAppInfo.version]);
+  });
+
+  testWidgets('the startup check says nothing when there is no newer release', (
+    tester,
+  ) async {
+    final client = StubShuUpdateClient();
+
+    await _pumpApp(tester, updateClient: client);
+    await tester.pumpAndSettle();
+
+    expect(find.text('发现新版本'), findsNothing);
+    expect(client.requestedVersions, <String>[ShuAppInfo.version]);
+  });
+
   testWidgets('the permission page lists what the app actually asks for', (
     tester,
   ) async {
@@ -790,8 +856,9 @@ void main() {
     await _openSettings(tester, '关于ShuVPN');
 
     // The rows ShuYo's page has but ShuVPN cannot back with anything: there is
-    // no site for the terms, no privacy policy and no update/feedback backend.
-    for (final gone in <String>['使用条款', '隐私政策', '检查更新', '问题与反馈']) {
+    // no site for the terms, no privacy policy and no feedback backend.
+    // 「检查更新」不在这一列 —— 它指向 GitHub 发布，ShuVPN 自己就有。
+    for (final gone in <String>['使用条款', '隐私政策', '问题与反馈']) {
       expect(find.text(gone), findsNothing);
     }
 
@@ -855,9 +922,8 @@ void main() {
       // 两个端口错开是硬要求：它们可以同时开着，撞在一起时第二个绑不上。
       expect(find.text('3322'), findsOneWidget);
       expect(find.text('2233'), findsOneWidget);
-      // 监听地址行显示「名字 · 地址」：只写名字看不出它到底是哪一张网卡。
-      // 两个通道各一行，所以一共两个。
-      expect(find.text('仅本机 · 127.0.0.1'), findsNWidgets(2));
+      // 监听地址行直接写绑定地址：两个通道各一行，所以一共两个。
+      expect(find.text('127.0.0.1'), findsNWidgets(2));
       expect(find.text('1400'), findsOneWidget);
       expect(find.text('跟随系统'), findsOneWidget);
 
@@ -1092,8 +1158,8 @@ void main() {
     // 所以开着没有代价，而关掉才是「回到旧行为」。
     expect(settings.vpnTcpWindowScaling, isTrue);
     // 监听范围是一条安全边界，出厂值只能是本机。
-    expect(settings.socksListen.label, '仅本机');
-    expect(settings.httpListen.label, '仅本机');
+    expect(settings.socksListen.address, '127.0.0.1');
+    expect(settings.httpListen.address, '127.0.0.1');
   });
 
   testWidgets('the settings sub-pages drop the card wrapper too', (
