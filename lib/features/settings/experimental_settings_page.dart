@@ -3,77 +3,58 @@ import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 
 import '../../app/router.dart';
+import '../../core/connection/connection_controller.dart';
 import '../../core/settings/settings_store.dart';
 import '../../widgets/settings_rows.dart';
 import '../../widgets/settings_scaffold.dart';
+import '../../widgets/shu_surfaces.dart';
 
-/// 「实验性选项」。界面上唯一一页**默认什么都不该打开**的设置。
+/// 「实验性选项」。
 ///
-/// 单独成页的理由只有一条：这里改的是数据面的基本行为，走不通时会让设备在
-/// 连接期间上不了网 —— 不该和「网络连接」里那些日常设置挤在一起。
-/// 页首那一行只提醒「不稳定、想清楚再动」，具体后果放在打开时的确认框里 ——
-/// 那才是真正要动手的那一刻。
+/// 这里放两类东西：**值得给用户留一条退路的取值**，以及那些「走回一遍」的
+/// 入口。
+///
+/// 与「网络连接」那一页一样，隧道跑着的时候整页封住（见
+/// [shuSettingsLockedNotice]）：窗口那一格在 `startVpn()` 里被读走，而重走
+/// 引导会重新登录、把连接整个拆掉 —— 让它们在运行期可点，只会得到「界面
+/// 变了、跑着的东西没变」这种最难查的状态。
 class ShuExperimentalSettingsPage extends StatelessWidget {
   const ShuExperimentalSettingsPage({super.key});
 
   @override
   Widget build(BuildContext context) {
     final settings = context.watch<SettingsStore>();
+    final locked = context.watch<ConnectionController>().tunnelUp;
 
     return ShuSettingsSubPage(
       title: '实验性选项',
+      banner: locked ? const ShuNoticeBar(shuSettingsLockedNotice) : null,
       children: [
-        const ShuSettingsWarning('下列实验性选项行为不稳定，请确认你清楚自己在做什么。'),
+        const SectionHeader(title: '系统 VPN'),
         SettingsSwitchRow(
-          icon: Icons.science_outlined,
-          title: 'TCP 走 L3',
-          value: settings.vpnTcpOverL3,
-          onChanged: (value) => _toggleTcpOverL3(context, settings, value),
+          icon: Icons.swap_horiz,
+          title: 'TCP 接收窗口缩放',
+          subtitle: settings.vpnTcpWindowScaling ? '1 MiB' : '64 KB',
+          value: settings.vpnTcpWindowScaling,
+          enabled: !locked,
+          onChanged: (value) => settings.vpnTcpWindowScaling = value,
         ),
-        // 入口，不是开关 —— 按下去立刻离开这一页，所以画着右箭头。
+        const ShuSettingsNote(
+          '只影响系统 VPN 那一半：它的 TCP 由本机终结器逐流接管，'
+          '终结器通告给本机协议栈的接收窗口就是每条连接的在途上限。'
+          '16 位窗口字段最多认 64 KB，而这段往返走的是应用自己的事件循环，'
+          '于是「64 KB ÷ 往返」成了单连接吞吐的天花板 —— 应用越忙它越低。',
+        ),
+
+        const SectionHeader(title: '引导'),
         SettingsRow(
           icon: Icons.tour_outlined,
           title: '新用户引导',
+          enabled: !locked,
           onTap: () => _replayOnboarding(context),
         ),
       ],
     );
-  }
-
-  /// 拨「TCP 走 L3」。
-  ///
-  /// 开启前把代价说全：这条路走不通时，这台设备在连着的时候会**完全**没有
-  /// TCP 联网能力。关闭**不问** —— 那一步永远朝着安全的方向走。
-  Future<void> _toggleTcpOverL3(
-    BuildContext context,
-    SettingsStore settings,
-    bool value,
-  ) async {
-    if (value) {
-      final confirmed = await showDialog<bool>(
-        context: context,
-        builder: (dialogContext) => AlertDialog(
-          title: const Text('开启 TCP 走 L3'),
-          content: const Text(
-            '开启后，TCP 与 UDP 流量将全部由 VPN 接口转发，系统不再设置代理。\n'
-            '若服务端不支持 TCP-over-L3，连接期间浏览器等应用将无法上网。\n'
-            '恢复方法：断开连接，关闭此选项，然后重新连接。',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(false),
-              child: const Text('取消'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(dialogContext).pop(true),
-              child: const Text('开启'),
-            ),
-          ],
-        ),
-      );
-      if (confirmed != true) return;
-    }
-    settings.vpnTcpOverL3 = value;
   }
 
   /// 重新走一遍新用户引导。

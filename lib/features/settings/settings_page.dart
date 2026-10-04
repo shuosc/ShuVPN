@@ -96,12 +96,8 @@ class SettingsPage extends StatelessWidget {
             title: '实验性选项',
             onTap: () => context.go('/settings/experimental'),
           ),
-          // ⚠️ 「日志」与「关于ShuVPN」两行**故意不带副标题**，其余六行都带。
-          //
-          // 这不是遗漏。上面六行是「你还得改点什么」的地方，副标题写的是
-          // 里面有几件事；最后这两行是「看一眼」的地方 —— 一个是流水，
-          // 一个是版本与许可。用行高的差别把它们从前面那六行里分出来，
-          // 比再加一道分隔线轻。
+          // 「实验性选项」「日志」「关于ShuVPN」三行不带副标题：副标题写的是
+          // 「里面有几件事」，而这三行各自只有一件事，再写一行只是复述。
           SettingsRow(
             icon: Icons.article_outlined,
             title: '日志',

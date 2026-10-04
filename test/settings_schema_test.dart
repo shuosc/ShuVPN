@@ -94,6 +94,49 @@ void main() {
     });
   });
 
+  group('v3 → v4', () {
+    test('只清掉「TCP 走 L3」实验开关', () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{
+        ShuSettingsSchema.versionKey: 3,
+        'settings.vpnTcpOverL3': true,
+      });
+      final prefs = await SharedPreferences.getInstance();
+      await ShuSettingsStore(prefs).migrateIfNeeded();
+
+      expect(prefs.containsKey('settings.vpnTcpOverL3'), isFalse);
+      expect(
+        prefs.getInt(ShuSettingsSchema.versionKey),
+        ShuSettingsSchema.current,
+      );
+    });
+
+    test('本机代理与 VPN 的设置原样保留', () async {
+      // ⚠️ 这一条是防回退的：HTTP 通道不再当系统 VPN 的 TCP 出口（那一步改由
+      // 本机终结器接管），但它本身仍然是一条独立的代理通道 —— 把它的设置
+      // 当成「不再行为」一并清掉，等于把用户配过的监听地址与端口静默重置。
+      SharedPreferences.setMockInitialValues(<String, Object>{
+        ShuSettingsSchema.versionKey: 3,
+        'settings.httpProxyEnabled': true,
+        'settings.httpListen': '0.0.0.0',
+        'settings.httpPort': 3322,
+        'settings.socksPort': 1080,
+        'settings.socksListen': '192.168.99.144',
+        'settings.autoStartProxy': true,
+        'settings.vpnMtu': 1280,
+      });
+      final prefs = await SharedPreferences.getInstance();
+      await ShuSettingsStore(prefs).migrateIfNeeded();
+
+      expect(prefs.getBool('settings.httpProxyEnabled'), isTrue);
+      expect(prefs.getString('settings.httpListen'), '0.0.0.0');
+      expect(prefs.getInt('settings.httpPort'), 3322);
+      expect(prefs.getInt('settings.socksPort'), 1080);
+      expect(prefs.getString('settings.socksListen'), '192.168.99.144');
+      expect(prefs.getBool('settings.autoStartProxy'), isTrue);
+      expect(prefs.getInt('settings.vpnMtu'), 1280);
+    });
+  });
+
   group('v2 → v3', () {
     test('装过旧版本的设备视为已完成引导，旧设置保留', () async {
       SharedPreferences.setMockInitialValues(<String, Object>{

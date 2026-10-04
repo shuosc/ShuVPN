@@ -22,7 +22,9 @@ abstract final class ShuSettingsSchema {
   ///   并去掉「资源外直连」。
   /// * 3 —— 新增新用户引导（`settings.welcomeCompleted`）。老用户视为
   ///   已完成，不弹引导。
-  static const current = 3;
+  /// * 4 —— 撤掉「TCP 走 L3」实验开关（服务端不接受 TCP-over-L3，TCP 改由
+  ///   本机终结器逐流接管）。
+  static const current = 4;
 
   /// 记录已完成的版本。缺失（0）表示这是从没有版本号的旧版本升上来的。
   static const versionKey = 'settings.schema.version';
@@ -82,6 +84,9 @@ class ShuSettingsStore {
     if (from >= 1 && from < 3) {
       await _migrateToV3();
     }
+    if (from < 4) {
+      await _migrateToV4();
+    }
 
     await _prefs.setInt(
       ShuSettingsSchema.versionKey,
@@ -129,5 +134,21 @@ class ShuSettingsStore {
   /// 两者一旦不一致，表现是「升级后所有人重新走一遍引导」，很难追溯到这。
   Future<void> _migrateToV3() async {
     await _prefs.setBool('settings.welcomeCompleted', true);
+  }
+
+  /// v3 → v4：撤掉「TCP 走 L3」实验开关。
+  ///
+  /// 那件事已经有结论：网关把每一条资源的 `enableTCPPrefL3` 都写成 `false`，
+  /// 服务端不接受 TCP-over-L3。于是 TCP 改由库里的本机终结器逐流接管
+  /// （见 `connection_controller.dart` 的 `startVpn`），磁盘上那个布尔值
+  /// 从此不再对应任何行为。
+  ///
+  /// ⚠️ **只清这一个键**。本机 HTTP 代理那一组（`settings.httpProxyEnabled` /
+  /// `httpListen` / `httpPort`）另有归处：它作为一条独立的代理通道留着 ——
+  /// Android 的系统代理只支持 HTTP，那条通道服务的正是只会 HTTPS 代理的
+  /// 应用。它不再当系统 VPN 的 TCP 出口，但设置本身照旧有效，抹掉就等于
+  /// 把用户配过的监听地址与端口静默重置。
+  Future<void> _migrateToV4() async {
+    await _prefs.remove('settings.vpnTcpOverL3');
   }
 }

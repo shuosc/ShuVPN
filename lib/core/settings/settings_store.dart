@@ -22,8 +22,10 @@ import '../logging/shu_log.dart';
 /// | 本机 SOCKS5 | [socksProxyEnabled] | false |
 /// | 本机 HTTP | [httpProxyEnabled] | false |
 ///
-/// 三条互不排斥，但**不代表可以任意组合**：系统 VPN 依赖本机 HTTP 通道
-/// （系统代理只认 HTTP），所以它开着时那一半会被强制拉起。
+/// 三条互不排斥，服务对象不同：系统 VPN 接管整机流量，两条本机代理只服务
+/// 「自己会把代理地址填进去」的应用。**三条之间没有依赖**：系统 VPN 那一半
+/// 的 TCP 由库里的本机终结器逐流接管（见 `connection_controller.dart` 的
+/// `startVpn`），不需要系统代理，也就不会去强拉任何一个本机代理。
 class SettingsStore extends ChangeNotifier {
   SettingsStore(this._prefs) {
     // 把磁盘上的日志设置推给缓冲区。**必须在这里做**：日志设施是个单例，
@@ -50,7 +52,7 @@ class SettingsStore extends ChangeNotifier {
   static const String _kVpnEnabled = 'settings.vpnEnabled';
   static const String _kVpnMtu = 'settings.vpnMtu';
   static const String _kVpnDns = 'settings.vpnDns';
-  static const String _kVpnTcpOverL3 = 'settings.vpnTcpOverL3';
+  static const String _kVpnTcpWindowScaling = 'settings.vpnTcpWindowScaling';
   static const String _kReachabilityTimeout = 'settings.timeoutSeconds';
   static const String _kServer = 'settings.server';
   static const String _kLoginDomain = 'settings.loginDomain';
@@ -132,16 +134,6 @@ class SettingsStore extends ChangeNotifier {
   set socksListen(ShuProxyListen value) =>
       _writeString(_kSocksListen, value.address);
 
-  /// 代理碰到**不在网关资源表里**的目标时怎么办。
-  ///
-  /// **没有这个设置，也没有直连兜底**：所有目标一律走隧道，隧道接不下的
-  /// 就是一次明确的失败。理由有二：
-  ///
-  /// * 学校给的是**整张 IPv4 表**的授权（`1.0.0.0-255.255.255.255/tcp:443`
-  ///   这种写法），正常根本没有「表外目标」可掉；
-  /// * 一个会私下从底层网络出去的代理，在用户看来与「隧道坏了但还能上网」
-  ///   完全一样 —— 那正是最难发现的一类故障。
-  ///
   /// 「启用本机 SOCKS5 代理」—— 隧道起来之后要不要把 SOCKS5 拉起来。
   ///
   /// 出厂值 **false**：安卓上默认走系统 VPN（[vpnEnabled]），本机代理是给
@@ -153,13 +145,12 @@ class SettingsStore extends ChangeNotifier {
   /// 「启用 HTTP 代理」。
   ///
   /// 与 SOCKS5 分开开关是有必要的：Android 的**系统代理只支持 HTTP**
-  /// （`VpnService.Builder.setHttpProxy` 收的就是 HTTP），而 SOCKS5 只能
-  /// 由用户自己往应用里填。两个通道对着不同的消费者，混在一个开关里会让
-  /// 「我只想让浏览器走隧道」和「我要接管全部应用」变成同一件事。
+  /// （WLAN → 代理里只有 HTTP 一个选项），而 SOCKS5 只能由用户自己往应用里
+  /// 填。两个通道对着不同的消费者，混在一个开关里会让「我只想让浏览器走
+  /// 隧道」和「我要接管全部应用」变成同一件事。
   ///
-  /// 出厂值 **false**。但注意 [vpnEnabled] 为真时这个通道会被**强制拉起**：
-  /// 系统 VPN 的 TCP 那一半完全靠它（见 `connection_controller.dart` 的
-  /// `startVpn`），那不是偏好，是依赖。
+  /// 出厂值 **false**。它**不被任何其他数据面强拉**：系统 VPN 的 TCP 那一半
+  /// 由本机终结器接管，不需要谁去当系统代理。
   bool get httpProxyEnabled => _prefs.getBool(_kHttpEnabled) ?? false;
 
   set httpProxyEnabled(bool value) => _writeBool(_kHttpEnabled, value);
@@ -199,22 +190,22 @@ class SettingsStore extends ChangeNotifier {
 
   set vpnDns(String value) => _writeString(_kVpnDns, value);
 
-  /// **实验**：把 TCP 也交给 L3，不依赖本机 HTTP 代理与系统代理。
+  /// 「TCP 接收窗口缩放」。
   ///
-  /// 出厂值 **false** —— 它默认关着不是保守，而是因为：
+  /// 系统 VPN 那一半的 TCP 由库里的本机终结器逐流接管，它通告给本机协议栈的
+  /// 接收窗口就是每条连接的**在途上限**：16 位窗口字段最多认 64 KB，而终结器
+  /// 与本机栈之间的往返走的是应用自己的事件循环（两个 isolate 跳、一层观测器、
+  /// 一次写 packet device），于是「64 KB ÷ 往返」成了单连接吞吐的天花板 ——
+  /// 应用越忙，它越低。
   ///
-  /// * 网关把每一条资源的 `enableTCPPrefL3` 都写成了 `false`（意图明确：
-  ///   「这个 app 的 TCP 走 TCP 隧道」），本地翻它是在逆着配置走；
-  /// * 打开之后 TCP 全部进 TUN，而**系统代理一个字都不设** —— 如果服务端
-  ///   不接受 TCP-over-L3，这台设备在连着的时候会彻底没有 TCP 联网能力。
-  ///
-  /// 它的用途是**验证**一件事：服务端到底接不接受 TCP-over-L3。接受的话，
-  /// 整个「系统代理 + HTTP 代理」那一半就可以撤掉（数据面从三条收成一条）；
-  /// 不接受的话，`atrust_channel_probe.dart` 会把服务端回的那个 status /
-  /// code 原样记进日志。
-  bool get vpnTcpOverL3 => _prefs.getBool(_kVpnTcpOverL3) ?? false;
+  /// 出厂开着：SYN-ACK 里带上 RFC 7323 的窗口缩放选项，窗口提到 1 MiB。
+  /// **对端没带这个选项时自动退回 16 位字段**，行为与从前逐字节一样，所以开着
+  /// 没有代价。关掉就是完全回到从前的取值（64 KB、不协商），留给「怀疑这条
+  /// 连接被某个中间盒搞坏」的排查。下一次连接读取，见实验性选项页。
+  bool get vpnTcpWindowScaling => _prefs.getBool(_kVpnTcpWindowScaling) ?? true;
 
-  set vpnTcpOverL3(bool value) => _writeBool(_kVpnTcpOverL3, value);
+  set vpnTcpWindowScaling(bool value) =>
+      _writeBool(_kVpnTcpWindowScaling, value);
 
   /// 一次连接握手的上限。
   ///

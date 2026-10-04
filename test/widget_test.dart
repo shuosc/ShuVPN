@@ -18,6 +18,7 @@ import 'package:shuvpn/core/logging/shu_log.dart';
 import 'package:shuvpn/core/settings/settings_store.dart';
 import 'package:shuvpn/features/connect/connect_page.dart';
 import 'package:shuvpn/features/settings/connection_settings_page.dart';
+import 'package:shuvpn/features/settings/experimental_settings_page.dart';
 import 'package:shuvpn/features/settings/log_page.dart';
 import 'package:shuvpn/features/settings/protocol_settings_page.dart';
 import 'package:shuvpn/shell/floating_dock.dart';
@@ -827,7 +828,8 @@ void main() {
       }
 
       // 撤掉的东西：没有直连兜底、没有证书固定、没有运行期统计行，
-      // 也没有实验开关 —— 它搬去了「实验性选项」。
+      // 也没有 TCP-over-L3 实验开关（那件事已经有结论，开关连同页面入口
+      // 一起撤了）。
       for (final gone in <String>[
         '资源外直连',
         '证书固定',
@@ -870,7 +872,7 @@ void main() {
     },
   );
 
-  testWidgets('the four runtime-locked pages freeze while the tunnel is up', (
+  testWidgets('the five runtime-locked pages freeze while the tunnel is up', (
     tester,
   ) async {
     SharedPreferences.setMockInitialValues(<String, Object>{});
@@ -880,6 +882,7 @@ void main() {
       'EasyConnect 协议': const ShuEasyConnectSettingsPage(),
       'OpenVPN 协议': const ShuOpenVpnSettingsPage(),
       '网络连接': const ShuConnectionSettingsPage(),
+      '实验性选项': const ShuExperimentalSettingsPage(),
     };
 
     // ① 隧道没跑：四个页面上都没有这一条 —— 它描述的是「此刻不能改」，
@@ -991,31 +994,59 @@ void main() {
     expect(vpnSwitch.onChanged, isNull);
   });
 
-  testWidgets('the experimental page warns first, then offers one switch', (
+  testWidgets('the experimental page holds the TCP window switch', (
     tester,
   ) async {
     await _pumpApp(tester);
     await _openSettings(tester, '实验性选项');
 
-    // 警告排在所有开关前面：这一页上的东西走不通时是真的上不了网，
-    // 而不是“可能稍微卡一点”。断言整句 —— 它不能被改淡。
-    expect(find.byType(ShuSettingsWarning), findsOneWidget);
-    expect(find.text('下列实验性选项行为不稳定，请确认你清楚自己在做什么。'), findsOneWidget);
+    // 「TCP 走 L3」那一条连同页首的警告一起撤掉了：它要验证的事已经有结论
+    // （网关不接受 TCP-over-L3），那条路改由本机终结器接管。
+    expect(find.text('TCP 走 L3'), findsNothing);
+    expect(find.byType(ShuSettingsWarning), findsNothing);
 
-    // 这一页只留一个开关，而且出厂是关的。
-    expect(find.text('TCP 走 L3'), findsOneWidget);
-    final switches = tester
-        .widgetList<SwitchListTile>(find.byType(SwitchListTile))
-        .toList();
-    expect(switches, hasLength(1));
-    expect(switches.single.value, isFalse, reason: '实验开关出厂关闭');
+    // 顶上那一格是「本机终结器通告多大的接收窗口」，出厂开着；副标题只写
+    // 当前这一档的大小。
+    expect(find.text('TCP 接收窗口缩放'), findsOneWidget);
+    final windowSwitch = tester.widget<SwitchListTile>(
+      find.byType(SwitchListTile),
+    );
+    expect(windowSwitch.value, isTrue);
+    expect(windowSwitch.onChanged, isNotNull);
+    expect(find.text('1 MiB'), findsOneWidget);
+    expect(find.byType(ShuSettingsNote), findsOneWidget);
 
-    // 它只在连接时被读一次，所以不在「网络连接」的运行期锁定里 ——
-    // 连着的时候也能改，改动下一次连接生效。
-    expect(switches.single.onChanged, isNotNull);
+    expect(find.text('系统 VPN'), findsOneWidget);
+    expect(find.text('引导'), findsOneWidget);
+    expect(find.text('新用户引导'), findsOneWidget);
 
-    // 页内解释性小字已清空：只剩一行警告。
-    expect(find.byType(ShuSettingsNote), findsNothing);
+    await _back(tester);
+  });
+
+  testWidgets('the TCP window switch flips the stored value and its caption', (
+    tester,
+  ) async {
+    await _pumpApp(tester);
+    await _openSettings(tester, '实验性选项');
+
+    await tester.tap(find.byType(SwitchListTile));
+    await tester.pumpAndSettle();
+    expect(
+      tester.widget<SwitchListTile>(find.byType(SwitchListTile)).value,
+      isFalse,
+    );
+    // 关掉之后副标题跟着换成另一档的大小：那一行是用户确认「现在是哪一档」
+    // 的唯一地方。
+    expect(find.text('64 KB'), findsOneWidget);
+
+    // 退出再进来，值还在 —— 说明它写进了 store，不只是界面上的一个开关。
+    await _back(tester);
+    await tester.tap(_settingsRow('实验性选项'));
+    await tester.pumpAndSettle();
+    expect(
+      tester.widget<SwitchListTile>(find.byType(SwitchListTile)).value,
+      isFalse,
+    );
 
     await _back(tester);
   });
@@ -1026,7 +1057,7 @@ void main() {
     await _pumpApp(tester);
     await _openSettings(tester, '实验性选项');
 
-    // 入口不是开关：整页仍然只有一个开关。
+    // 这一页上引导入口仍然只有一个，而且它不是开关。
     expect(find.text('新用户引导'), findsOneWidget);
     expect(find.byType(SwitchListTile), findsOneWidget);
 
@@ -1057,6 +1088,9 @@ void main() {
     expect(settings.vpnEnabled, isTrue);
     expect(settings.vpnMtu, 1400);
     expect(settings.vpnDns, isEmpty);
+    // 接收窗口缩放出厂开着：对端不带那个选项时它自己退回 64 KB，
+    // 所以开着没有代价，而关掉才是「回到旧行为」。
+    expect(settings.vpnTcpWindowScaling, isTrue);
     // 监听范围是一条安全边界，出厂值只能是本机。
     expect(settings.socksListen.label, '仅本机');
     expect(settings.httpListen.label, '仅本机');
