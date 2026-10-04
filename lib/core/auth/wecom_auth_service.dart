@@ -72,8 +72,8 @@ class ShuWeComScanResult {
 class ShuWeComSessionResult {
   const ShuWeComSessionResult({required this.sessionCookies});
 
-  /// 本次流程收集到的全部 Cookie，必须写入 WebView，
-  /// 否则加载 callback 时 SSO 会认为未登录并重定向回登录页。
+  /// 本次流程收集到的全部 Cookie，必须并入统一认证会话，
+  /// 否则后续换授权码时 SSO 会认为未登录并重定向回登录页。
   final List<({Cookie cookie, String domain, String path})> sessionCookies;
 }
 
@@ -114,10 +114,6 @@ class ShuWeComAuthService {
   static final _jsonpPattern = RegExp(r'jsonpCallback\((\{.*?\})\)');
 
   void dispose() => _client.close(force: true);
-
-  /// 把本次流程收集到的 Cookie 交给调用方，用于装入 WebView。
-  List<({Cookie cookie, String domain, String path})> get cookieJar =>
-      _cookies.entries;
 
   /// 编码 OAuth 参数为 base64url 无填充字符串。
   ///

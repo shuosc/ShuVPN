@@ -97,7 +97,7 @@ class AboutPage extends StatelessWidget {
 /// 打开一个外部链接。
 ///
 /// 一律走系统浏览器（`externalApplication`）：这一页上的链接最终都落在
-/// GitHub 上，而 GitHub 的网页在应用内 WebView 里的登录与跳转体验比浏览器差。
+/// GitHub 上，登录与跨站跳转交给浏览器处理更可靠。
 Future<void> _openExternalUrl(BuildContext context, String url) async {
   var opened = false;
   try {

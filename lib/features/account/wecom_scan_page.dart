@@ -16,8 +16,8 @@ import '../../core/auth/wecom_auth_service.dart';
 /// 结构照搬 ShuYo 的 `WeComScanPage`：展示二维码，支持点击拉起企业微信
 /// 确认页；后台长轮询等待扫码，成功后把会话交回 [AccountCenter]。
 ///
-/// 与 ShuYo 的差别只有一处：ShuYo 把换来的 Cookie 交给登录页自己装进
-/// WebView，这里直接交给账户中心 —— 后面向三个系统换取授权码要用同一个
+/// 与 ShuYo 的差别只有一处：ShuYo 把换来的 Cookie 交给登录页自己消费，
+/// 这里直接交给账户中心 —— 后面向三个系统换取授权码要用同一个
 /// `SHU_OAUTH2` 会话。
 class WeComScanPage extends StatefulWidget {
   const WeComScanPage({super.key});

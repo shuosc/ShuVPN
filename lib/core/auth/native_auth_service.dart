@@ -2,10 +2,9 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
+import 'dart:typed_data';
 
-import 'package:flutter/foundation.dart';
 import 'package:pointycastle/export.dart';
-import 'package:webview_flutter/webview_flutter.dart';
 
 import '../logging/shu_log.dart';
 import 'auth_constants.dart';
@@ -108,10 +107,10 @@ String encodeOAuthParams(Map<String, String> params) {
 ///    `/oauth2/login/<params>` 处停下并**截取路径里的 `params`** —— 这一步是
 ///    整条链路的地基，`params` 缺失或伪造都会得到 `badRequestParams`；
 /// 2. `POST /oauth/userLogin`（密码 RSA 加密）→ 可选两步验证；
-/// 3. 拿到 [ShuLoginResult.callbackUri] 后交给 WebView 完成最后一跳。
+/// 3. 从响应里的 `redirectUri` 解析并校验业务系统回调地址。
 ///
-/// 登录成功后 SSO 下发 `SHU_OAUTH2`（HttpOnly，host-scoped 于 newsso），
-/// 因此最后一步必须在 WebView 里做 —— dart:io 的 Cookie 无法写入 WebView。
+/// SSO 下发的 `SHU_OAUTH2`（HttpOnly，host-scoped 于 newsso）由 [_request]
+/// 收进 [_cookieStore]，后续向各业务系统换授权码时带上即可。
 class ShuNativeAuthService {
   ShuNativeAuthService({HttpClient? httpClient, ShuCookieStore? cookieStore})
     : _client = httpClient ?? HttpClient(),
@@ -122,10 +121,6 @@ class ShuNativeAuthService {
 
   final HttpClient _client;
   final ShuCookieStore _cookieStore;
-
-  /// 供 WebView 装入的 Cookie 快照。
-  List<({Cookie cookie, String domain, String path})> get cookies =>
-      _cookieStore.entries;
 
   // ------------------------------------------------------- 登录挑战的状态
   //
@@ -141,8 +136,8 @@ class ShuNativeAuthService {
   /// 把外部流程（企业微信扫码）取得的会话 Cookie 并入本次认证会话。
   ///
   /// 企微扫码走的是独立的 `ShuWeComAuthService`，不会经过本类的 [login]，
-  /// 因此 [_cookieStore] 是空的。必须在 [installCookiesInWebView] 之前并入，
-  /// 否则 WebView 加载 callbackUri 时会因缺少会话被重定向回登录页。
+  /// 因此 [_cookieStore] 是空的。必须在向各业务系统换授权码之前并入，
+  /// 否则会被判定为未登录并跳回登录页。
   void adoptSessionCookies(
     Iterable<({Cookie cookie, String domain, String path})> cookies,
   ) {
@@ -152,88 +147,6 @@ class ShuNativeAuthService {
         ..domain = entry.domain
         ..path = entry.path;
       _cookieStore.save(Uri.parse('https://${entry.domain}'), [scoped]);
-    }
-  }
-
-  /// 把原生会话的 Cookie 装进 WebView。
-  ///
-  /// 装完必须回读确认 —— Android 的 `CookieManager.setCookie` 在平台层是
-  /// fire-and-forget，写入后立刻导航会用到尚未提交的旧会话。
-  Future<void> installCookiesInWebView() async {
-    final manager = WebViewCookieManager();
-    final domains = <String>{};
-    final expectedByDomain = <String, Map<String, String>>{};
-    for (final stored in _cookieStore.entries) {
-      final cookie = stored.cookie;
-      if (cookie.value.isEmpty) continue;
-      domains.add(stored.domain);
-      expectedByDomain.putIfAbsent(
-        stored.domain,
-        () => <String, String>{},
-      )[cookie.name] = cookie.value;
-      await manager.setCookie(
-        WebViewCookie(
-          name: cookie.name,
-          value: _webViewCookieValue(cookie.value),
-          domain: stored.domain,
-          path: stored.path,
-        ),
-      );
-    }
-    if (domains.isEmpty) return;
-
-    for (var attempt = 0; attempt < 6; attempt++) {
-      await Future<void>.delayed(
-        attempt == 0
-            ? const Duration(milliseconds: 150)
-            : const Duration(milliseconds: 300),
-      );
-      var allVisible = true;
-      for (final domain in domains) {
-        List<WebViewCookie> visible;
-        try {
-          visible = await manager.getCookies(
-            domain: Uri.parse('https://$domain'),
-          );
-        } on Object {
-          allVisible = false;
-          continue;
-        }
-        final expected = expectedByDomain[domain] ?? const <String, String>{};
-        for (final entry in expected.entries) {
-          final hasExpectedValue = visible.any(
-            (cookie) =>
-                cookie.name == entry.key &&
-                _cookieValueMatches(entry.value, cookie.value),
-          );
-          if (!hasExpectedValue) allVisible = false;
-        }
-      }
-      if (allVisible) {
-        // Chromium 的 network service 可能还在提交中；放一拍再导航。
-        if (defaultTargetPlatform == TargetPlatform.android) {
-          await Future<void>.delayed(const Duration(milliseconds: 500));
-        }
-        return;
-      }
-    }
-
-    // 部分 Android WebView 版本对已转义的会话 Cookie 处理不同，
-    // 回退成原始线上值再写一次。
-    if (defaultTargetPlatform == TargetPlatform.android) {
-      for (final stored in _cookieStore.entries) {
-        final cookie = stored.cookie;
-        if (cookie.value.isEmpty) continue;
-        await manager.setCookie(
-          WebViewCookie(
-            name: cookie.name,
-            value: cookie.value,
-            domain: stored.domain,
-            path: stored.path,
-          ),
-        );
-      }
-      await Future<void>.delayed(const Duration(milliseconds: 500));
     }
   }
 
@@ -536,29 +449,6 @@ class ShuNativeAuthService {
   void _validateUri(Uri uri) {
     if (uri.scheme != 'https' || !ShuAuthConstants.isShuHost(uri.host)) {
       throw const ShuAuthException('unsafeRedirect', '认证服务返回了非上海大学的跳转地址');
-    }
-  }
-
-  /// 把原生 `Set-Cookie` 的值转成 WebView 需要的形态。
-  ///
-  /// `webview_flutter_android` 会在 `setCookie` 内部再做一次转义，而原生
-  /// Set-Cookie 已经是线上表示，所以要先解掉一层，否则会话 Cookie 会被
-  /// 双重编码后服务端拒绝。
-  String _webViewCookieValue(String value) {
-    if (defaultTargetPlatform != TargetPlatform.android) return value;
-    try {
-      return Uri.decodeComponent(value);
-    } on FormatException {
-      return value;
-    }
-  }
-
-  static bool _cookieValueMatches(String expected, String actual) {
-    if (expected == actual) return true;
-    try {
-      return Uri.decodeComponent(actual) == expected;
-    } on FormatException {
-      return false;
     }
   }
 

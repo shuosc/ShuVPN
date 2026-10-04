@@ -3,9 +3,8 @@ import 'dart:io';
 /// 原生认证流程在内存中维护的 Cookie 容器。
 ///
 /// 抽成独立类是为了让「企业微信扫码取得的 SSO 会话 Cookie 是否正确并入
-/// 后续请求」这一行为可以脱离 WebView 平台单独测试 ——
-/// [ShuNativeAuthService] 的安装步骤会创建 `WebViewCookieManager`，
-/// 在纯 Dart 单元测试里不可用。
+/// 后续请求」这一行为可以脱离平台单独测试 —— 它不依赖任何 Flutter 插件层，
+/// 在纯 Dart 单元测试里可以直接构造。
 class ShuCookieStore {
   final List<_StoredCookie> _cookies = [];
 

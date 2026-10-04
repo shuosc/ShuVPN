@@ -3,7 +3,6 @@ import 'dart:io';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../logging/shu_log.dart';
 import 'atrust_auth_chain.dart';
 import 'atrust_device_id.dart';
 import 'authorize_service.dart';
@@ -95,12 +94,6 @@ class ShuAuthSession {
     // 域名显式钉在 newsso 上：`SHU_OAUTH2` 是 host-scoped 的，
     // 不能指望 `dart:io` 从 Set-Cookie 文本里推出域名。
     _cookies.save(Uri.parse(ShuAuthConstants.ssoBase), cookies);
-    if (!hasSession) return;
-    // WebView 也要拿到，否则业务系统回调页在 WebView 里会当成未登录。
-    // 失败不影响 HTTP 链路（缓存里的 Cookie 已经够用了）。
-    _native.installCookiesInWebView().catchError((Object error) {
-      ShuLog.w(ShuLogTag.auth, '恢复会话时写入 WebView Cookie 失败 · $error · 忽略');
-    });
   }
 
   /// 把当前会话落盘。
@@ -118,9 +111,6 @@ class ShuAuthSession {
     if (cookie.isEmpty) return;
     await store.save(cookie);
   }
-
-  /// 把会话 Cookie 装进 WebView（业务系统回调页在 WebView 里加载）。
-  Future<void> installCookiesInWebView() => _native.installCookiesInWebView();
 
   /// 清空本地会话状态（退出登录），连带抹掉磁盘上的那一份。
   void clear() {

@@ -253,7 +253,7 @@ class ShuLog extends ChangeNotifier {
 abstract final class ShuLogTag {
   const ShuLogTag._();
 
-  /// 统一身份认证（登录、两步验证、WebView Cookie）。
+  /// 统一身份认证（登录、两步验证、会话 Cookie）。
   static const auth = 'auth';
 
   /// aTrust 网关的 OAuth2 / 认证链。
