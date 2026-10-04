@@ -17,8 +17,9 @@ import 'vpn_packet_log.dart';
 /// | 系统 VPN（TUN） | `ShuPacketObserver` 逐包累加 | IP 层（含包头） |
 /// | 本机代理（HTTP + SOCKS5） | 本文件，在流上包一层 | TCP 载荷层 |
 ///
-/// 两条**不会重复计数**：交给 TUN 的只有 UDP 网段（见 `vpn_routes.dart` 的
-/// `l3Routes`），TCP 全部走代理，两者的字节集合不相交。
+/// 两条**不会重复计数**：两个本机代理监听的是回环（或某张具名网卡），而
+/// TUN 的路由来自网关资源表、不含回环；本应用自己的 socket 又被排除在
+/// VPN 之外（`addDisallowedApplication`）。
 ///
 /// 层次不同（一个含 IP 头、一个不含）这件事不打算抹平：这两个数字的用途是
 /// 「连接页上那行实时速率」，用户在系统设置里对的是同一量级的量；为了对齐
@@ -50,17 +51,29 @@ class ShuTrafficMeter {
 
   /// 隧道 TCP 建连耗时的指数滑动平均（毫秒）；一次样本都还没有时为 `null`。
   ///
+  /// 它量的是**建连**那一段：从发起拨号到隧道里的 TCP 通道握手完成，
+  /// 包含 TLS、节点认证、以及服务端去连目标的时间。所以它天然大于 RTT，
+  /// 显示时也不该被读成 ping。
+  ///
   /// 用滑动平均而不是最后一次：单次建连会被一次 DNS 超时或者一次 TCP 重传
   /// 拉得很难看，而这一格要回答的是「现在这条隧道快不快」。
   /// 系数 0.3 —— 大约三四次样本之后新值就占主导。
   double? latencyMs;
 
-  /// 记一次建连耗时样本。
+  /// 记一次建连耗时样本。只该在**成功**时调用：失败那一次量到的是超时值，
+  /// 不是这条隧道平时有多快。
   void sampleLatency(Duration duration) {
     final sample = duration.inMicroseconds / 1000;
     final previous = latencyMs;
     latencyMs = previous == null ? sample : previous * 0.7 + sample * 0.3;
   }
+
+  /// 丢掉已积累的建连耗时样本。
+  ///
+  /// 每次建立连接时调一次：这一格回答的是「**现在这条**隧道快不快」，
+  /// 跨隧道留着的旧值会让它答错 —— 换了网关之后，第一眼看到的还是上一个
+  /// 网关的数，而那个数要等新样本攒到足够多才会被挤掉。
+  void resetLatency() => latencyMs = null;
 
   /// 把一条已经建好的代理流包上计数与收尾日志。
   ///
@@ -85,13 +98,16 @@ class _MeteredStream implements SangforTcpStream {
     required this.meter,
     required this.target,
     required this.routeLabel,
-  }) : _started = DateTime.now();
+  });
 
   final SangforTcpStream _inner;
   final ShuTrafficMeter meter;
   final String target;
   final String routeLabel;
-  final DateTime _started;
+
+  /// 用 [Stopwatch] 而不是 `DateTime.now()`：后者是墙钟，一次 NTP 校正就能让
+  /// 这一行印出负的时长。
+  final Stopwatch _elapsed = Stopwatch()..start();
 
   int _upPackets = 0;
   int _downPackets = 0;
@@ -135,13 +151,12 @@ class _MeteredStream implements SangforTcpStream {
   void _closeLog() {
     if (_closedLogged) return;
     _closedLogged = true;
-    final elapsed = DateTime.now().difference(_started);
     ShuLog.i(
       ShuLogTag.proxy,
       '[TCP] $target closed, '
       'up $_upPackets pkt ${formatByteCount(_upBytes)}, '
       'down $_downPackets pkt ${formatByteCount(_downBytes)}, '
-      '${formatDuration(elapsed)} · $routeLabel',
+      '${formatDuration(_elapsed.elapsed)} · $routeLabel',
     );
   }
 }

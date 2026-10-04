@@ -120,6 +120,19 @@ void main() {
       meter.sampleLatency(const Duration(milliseconds: 3000));
       expect(meter.latencyMs, closeTo(970, 0.5));
     });
+
+    test('换隧道时清掉旧样本，否则显示的是上一个网关的数', () {
+      final meter = ShuTrafficMeter();
+      meter.sampleLatency(const Duration(milliseconds: 300));
+      expect(meter.latencyMs, 300);
+
+      meter.resetLatency();
+      expect(meter.latencyMs, isNull, reason: '清掉之后回到「还没有样本」');
+
+      // 新样本从零开始积累，不被上一个网关的 300 拉高。
+      meter.sampleLatency(const Duration(milliseconds: 80));
+      expect(meter.latencyMs, 80);
+    });
   });
 }
 
