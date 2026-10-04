@@ -9,7 +9,7 @@
 
 - 校园账户 账密/企业微信登录支持
 - aTrust, Easyconnect, OpenVPN 多协议支持
-- 按照各平台特性设计的多种接入方式,包含 HTTP 代理，Socks5代理等
+- 按照各平台特性设计的多种接入方式,包含 HTTP 代理、SOCKS5 代理、Android VPN 服务等
 
 ## 安装
 

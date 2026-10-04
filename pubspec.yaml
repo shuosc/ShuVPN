@@ -24,24 +24,24 @@ dependencies:
   #
   # `flutter_sangfor` owns the session lifecycle and the userspace SOCKS5
   # frontend; the two connector packages carry the protocol cores and never
-  # depend on each other. Everything is published on pub.dev, but the root
-  # package is overridden below to the `preca-hoshino` fork, whose Android
-  # VpnService carries four patches upstream has not taken (see the class doc
-  # in the fork's `VpnTunnelService.kt`). The override is what redirects the
-  # connectors' own hosted `flutter_sangfor` edge: pub admits one source per
-  # name, so a plain git entry here would be rejected as a conflict.
+  # depend on each other. All three are published on pub.dev.
   #
-  # Pinned to exact versions on purpose, not `^0.0.5`. The caret also admits
-  # 0.0.8, and that combination does not compile: 0.0.8's `tcp_termination.dart`
-  # builds on types that only exist in a 0.0.8 root package. The mismatch stayed
-  # invisible locally because `pubspec.lock` pins 0.0.5, but the lock records the
-  # mirror URL it was written against, so CI -- which talks to pub.dev --
-  # discards it and re-resolves. Exact pins make that re-resolution land on the
-  # same versions either way. Lift all three together, once the fork picks up a
-  # release that folds in the patches.
-  flutter_sangfor: 0.0.5
-  flutter_sangfor_easy_connect: 0.0.5
-  flutter_sangfor_atrust: 0.0.5
+  # The root package is overridden below to the `preca-hoshino` fork, which is
+  # the seam where a fix would land if upstream does not take one. The Android
+  # `VpnTunnelService` bug it exists for is still present in 0.0.12 -- see the
+  # class doc in `lib/core/connection/shu_android_vpn.dart` for what it does
+  # and why the app runs its own `ShuVpnService` instead.
+  #
+  # Pinned to exact versions on purpose, not `^0.0.12`. The three are published
+  # in lockstep and do not compile when a connector moves ahead of the root
+  # package -- 0.0.8's `tcp_termination.dart` builds on types that only that
+  # release's root package defines. The lock records the mirror URL it was
+  # written against, so CI -- which talks to pub.dev -- discards it and
+  # re-resolves; exact pins make that re-resolution land on the same versions
+  # either way. Lift all three together, then drop these pins back to a caret.
+  flutter_sangfor: 0.0.12
+  flutter_sangfor_easy_connect: 0.0.12
+  flutter_sangfor_atrust: 0.0.12
 
   # The userspace SOCKS5 frontend. Pure Dart, so it runs on every platform
   # the app does -- that is what makes the proxy the fallback data plane
@@ -62,11 +62,6 @@ dependencies:
   provider: ^6.1.5+1
   go_router: ^18.0.1
 
-  # The unified-identity callback is completed in a hidden WebView: the SSO
-  # session lives in the WebView cookie store, not in dart:io, so the last leg
-  # of every per-system login has to run in a real browser engine.
-  webview_flutter: ^4.14.1
-  webview_flutter_android: ^4.12.0
   # Launches the enterprise-WeChat app for the QR confirmation page.
   url_launcher: ^6.3.2
 
