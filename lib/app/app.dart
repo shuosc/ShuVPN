@@ -6,6 +6,7 @@ import '../core/account/account_center.dart';
 import '../core/connection/connection_controller.dart';
 import '../core/connection/protocol.dart';
 import '../core/settings/settings_store.dart';
+import '../core/update/shu_update_client.dart';
 import 'app_info.dart';
 import 'router.dart';
 import 'theme.dart';
@@ -16,9 +17,15 @@ import 'theme.dart';
 /// controller and the account center — and nothing else. Screens read them
 /// through `provider`; no screen owns connection state of its own.
 class ShuVpnApp extends StatefulWidget {
-  const ShuVpnApp({super.key, required this.settings});
+  const ShuVpnApp({super.key, required this.settings, this.updateClient});
 
   final SettingsStore settings;
+
+  /// 更新检查的通道。
+  ///
+  /// 可注入只为测试：启动路径每次都会跑一次检查，而 widget 测试既不该真的
+  /// 发请求，也不该依赖 GitHub 的返回。生产用 [GithubReleaseClient]。
+  final ShuUpdateClient? updateClient;
 
   @override
   State<ShuVpnApp> createState() => _ShuVpnAppState();
@@ -46,6 +53,9 @@ class _ShuVpnAppState extends State<ShuVpnApp> {
         ChangeNotifierProvider<AccountCenter>(
           create: (_) =>
               createAccountCenter(preferences: widget.settings.preferences),
+        ),
+        Provider<ShuUpdateClient>(
+          create: (_) => widget.updateClient ?? GithubReleaseClient(),
         ),
       ],
       child: Consumer<SettingsStore>(

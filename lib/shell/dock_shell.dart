@@ -1,11 +1,17 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_sangfor/flutter_sangfor.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 
+import '../app/app_info.dart';
 import '../core/account/account_center.dart';
 import '../core/connection/connection_controller.dart';
 import '../core/logging/shu_log.dart';
+import '../core/update/shu_update_client.dart';
+import '../core/update/shu_update_policy.dart';
+import '../widgets/shu_update_prompt.dart';
 import 'floating_dock.dart';
 
 /// Hosts the three dock destinations.
@@ -48,7 +54,27 @@ class _DockShellState extends State<DockShell> {
       // 一打开应用就发一串请求 —— 其中一项真的要建一次 aTrust 隧道。而用户
       // 大多只是来连隧道的，根本没打开过账户页。核对挪到账户页真正被打开时
       // （`AccountCenter.verifyIfStale`），结论则用磁盘快照先顶上。
+
+      // 更新检查同理：一次网络往返，不能挡在首帧前面，失败也只记一行日志。
+      unawaited(_checkForUpdate());
     });
+  }
+
+  /// 启动后查一次更新，有新版本就弹窗。
+  ///
+  /// 不去重：只要本地版本不是远端最新，每次启动都提示。
+  Future<void> _checkForUpdate() async {
+    if (!ShuUpdatePolicy.enabled) return;
+    final client = context.read<ShuUpdateClient>();
+    try {
+      final update = await client.checkForUpdate(ShuAppInfo.version);
+      if (!mounted || update == null) return;
+      final openDownload = await showShuUpdatePrompt(context, update: update);
+      if (!mounted || !openDownload) return;
+      await openShuUpdateUrl(context, update.targetUrl);
+    } on Object catch (error) {
+      ShuLog.w(ShuLogTag.update, '启动检查更新失败 · $error');
+    }
   }
 
   Future<String> _promptCode(String title, String message) async {

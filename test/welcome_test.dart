@@ -30,6 +30,8 @@ import 'package:shuvpn/core/settings/settings_store.dart';
 import 'package:shuvpn/features/onboarding/welcome_page.dart';
 import 'package:shuvpn/shell/floating_dock.dart';
 
+import 'shu_update_stub.dart';
+
 /// 一台真手机的视口，与 `widget_test.dart` 的 `_pumpApp` 同一套数字。
 Future<void> _viewport(WidgetTester tester) async {
   tester.view.physicalSize = const Size(720, 3600);
@@ -42,7 +44,9 @@ Future<void> _pumpFreshInstall(WidgetTester tester) async {
   await _viewport(tester);
   SharedPreferences.setMockInitialValues(<String, Object>{});
   final settings = await SettingsStore.load();
-  await tester.pumpWidget(ShuVpnApp(settings: settings));
+  await tester.pumpWidget(
+    ShuVpnApp(settings: settings, updateClient: StubShuUpdateClient()),
+  );
   await tester.pumpAndSettle();
 }
 

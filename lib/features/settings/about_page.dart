@@ -1,26 +1,39 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../app/app_info.dart';
 import '../../app/shuyo_text_styles.dart';
 import '../../app/theme.dart';
+import '../../core/update/shu_update_client.dart';
+import '../../core/update/shu_update_policy.dart';
 import '../../widgets/shu_app_bar.dart';
 import '../../widgets/shu_surfaces.dart';
+import '../../widgets/shu_update_prompt.dart';
 import 'permission_info_page.dart';
 
 /// 设置目录页最后一行进来的地方。
 ///
 /// 版式照 `ShuYo`（`lib/features/settings/client_settings_page.dart` 的
-/// `_AboutClientPage`）逐块抄：顶部一块居中的应用标识，下面按「项目信息」
-/// 「隐私与声明」两组铺开可点的行，末尾一段免责声明。用**分组小标题**而不是
-/// 卡片 —— 它把「这是谁」和「去哪找」分开，又不用给每一组套一个圆角框。
+/// `_AboutClientPage`）逐块抄：顶部一块居中的应用标识，下面按分组铺开可点的
+/// 行，末尾一段免责声明。用**分组小标题**而不是卡片 —— 它把「这是谁」和
+/// 「去哪找」分开，又不用给每一组套一个圆角框。
 ///
-/// 与原版不同的只有内容：ShuYo 的「问题与反馈 / 检查更新 / 使用条款 /
-/// 隐私政策」都指向它自己的后端与站点，ShuVPN 没有，所以整组去掉；
-/// 「权限说明」子页里的条目按本应用真实申请的权限重写。「开源许可」是**只读**
-/// 一行 —— 许可名写出来，但不做跳转。
-class AboutPage extends StatelessWidget {
+/// 与原版不同的地方只有两处。一是内容：ShuYo 的「问题与反馈 / 使用条款 /
+/// 隐私政策」指向它自己的后端与站点，ShuVPN 没有，所以那些行不做；
+/// 「权限说明」子页里的条目按本应用真实申请的权限重写，「开源许可」是**只读**
+/// 一行。二是它的「支持」组只剩「检查更新」一项，且只在安卓上出现 ——
+/// 更新源是 GitHub 的 APK 发布，别的平台没有可下的东西。
+class AboutPage extends StatefulWidget {
   const AboutPage({super.key});
+
+  @override
+  State<AboutPage> createState() => _AboutPageState();
+}
+
+class _AboutPageState extends State<AboutPage> {
+  /// 手动检查是否在跑。它同时是那一行的 spinner 与「先别再点」的开关。
+  bool _checkingUpdate = false;
 
   @override
   Widget build(BuildContext context) {
@@ -72,6 +85,22 @@ class AboutPage extends StatelessWidget {
               ),
             ),
           ),
+          if (ShuUpdatePolicy.enabled) ...[
+            const SizedBox(height: 18),
+            const _AboutGroupTitle('支持'),
+            _AboutRow(
+              icon: Icons.system_update_outlined,
+              title: '检查更新',
+              trailing: _checkingUpdate
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2.5),
+                    )
+                  : null,
+              onTap: _checkingUpdate ? null : _checkForUpdate,
+            ),
+          ],
           const Padding(
             padding: EdgeInsets.symmetric(vertical: 24),
             child: Divider(),
@@ -91,6 +120,31 @@ class AboutPage extends StatelessWidget {
         ],
       ),
     );
+  }
+
+  /// 手动查一次更新。
+  ///
+  /// 文案与 `ShuYo` 的 `_checkForUpdate` 一致：没有新版本、失败这两种结果都
+  /// 用 snack 说，有更新才弹窗。
+  Future<void> _checkForUpdate() async {
+    setState(() => _checkingUpdate = true);
+    try {
+      final update = await context.read<ShuUpdateClient>().checkForUpdate(
+        ShuAppInfo.version,
+      );
+      if (!mounted) return;
+      if (update == null) {
+        showShuSnack(context, '已是最新版本');
+        return;
+      }
+      final openDownload = await showShuUpdatePrompt(context, update: update);
+      if (!mounted || !openDownload) return;
+      await openShuUpdateUrl(context, update.targetUrl);
+    } on Object catch (error) {
+      if (mounted) showShuSnack(context, '检查更新失败：$error');
+    } finally {
+      if (mounted) setState(() => _checkingUpdate = false);
+    }
   }
 }
 
@@ -197,25 +251,27 @@ class _AboutGroupTitle extends StatelessWidget {
   }
 }
 
-/// 关于页上的一行：图标 + 标题 + 可选副标题 + 右箭头。
+/// 关于页上的一行：图标 + 标题 + 可选副标题 + 尾部。
 ///
 /// 不复用 `SettingsRow`：那一行的副标题说的是「这一组里有什么」，而这里说的是
 /// 「点下去去哪」（仓库地址、许可名），字号与颜色都不同。
 ///
-/// [onTap] 为 null 时这一行是**只读**的，并且不画箭头 —— 与本仓库里
-/// `SettingsRow` 同一条规矩：箭头是「这里可以点」的承诺。[onTap] 就是
-/// `ListTile.onTap`，只读行自然也没有水波纹。
+/// [trailing] 传了就用它，没传时按 [onTap] 决定画不画箭头 —— 与本仓库里
+/// `SettingsRow` 同一条规矩：箭头是「这里可以点」的承诺，只读行不画。检查更新
+/// 那一行在检查期间把箭头换成 spinner，同时把 [onTap] 置空。
 class _AboutRow extends StatelessWidget {
   const _AboutRow({
     required this.icon,
     required this.title,
     this.subtitle,
+    this.trailing,
     this.onTap,
   });
 
   final IconData icon;
   final String title;
   final String? subtitle;
+  final Widget? trailing;
   final VoidCallback? onTap;
 
   @override
@@ -225,7 +281,8 @@ class _AboutRow extends StatelessWidget {
       leading: Icon(icon),
       title: Text(title),
       subtitle: subtitle == null ? null : Text(subtitle!),
-      trailing: onTap == null ? null : const Icon(Icons.chevron_right),
+      trailing:
+          trailing ?? (onTap == null ? null : const Icon(Icons.chevron_right)),
       onTap: onTap,
     );
   }

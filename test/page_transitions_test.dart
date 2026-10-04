@@ -25,6 +25,8 @@ import 'package:shuvpn/features/onboarding/welcome_page.dart';
 import 'package:shuvpn/shell/floating_dock.dart';
 import 'package:shuvpn/widgets/shu_surfaces.dart';
 
+import 'shu_update_stub.dart';
+
 /// 与 `widget_test.dart` 的视口一致：一台高瘦的手机（逻辑 360×1800）。
 void _viewport(WidgetTester tester) {
   tester.view.physicalSize = const Size(720, 3600);
@@ -38,7 +40,9 @@ Future<void> _pumpApp(WidgetTester tester) async {
   SharedPreferences.setMockInitialValues(<String, Object>{});
   final settings = await SettingsStore.load();
   settings.welcomeCompleted = true;
-  await tester.pumpWidget(ShuVpnApp(settings: settings));
+  await tester.pumpWidget(
+    ShuVpnApp(settings: settings, updateClient: StubShuUpdateClient()),
+  );
   await tester.pumpAndSettle();
 }
 
@@ -46,7 +50,12 @@ Future<void> _pumpApp(WidgetTester tester) async {
 Future<void> _pumpFreshInstall(WidgetTester tester) async {
   _viewport(tester);
   SharedPreferences.setMockInitialValues(<String, Object>{});
-  await tester.pumpWidget(ShuVpnApp(settings: await SettingsStore.load()));
+  await tester.pumpWidget(
+    ShuVpnApp(
+      settings: await SettingsStore.load(),
+      updateClient: StubShuUpdateClient(),
+    ),
+  );
   await tester.pumpAndSettle();
 }
 

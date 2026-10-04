@@ -285,6 +285,9 @@ abstract final class ShuLogTag {
 
   /// 设置。
   static const settings = 'settings';
+
+  /// 检查更新。
+  static const update = 'update';
 }
 
 /// 脱敏：只留首尾各 [keep] 个字符。
