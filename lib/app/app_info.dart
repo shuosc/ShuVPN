@@ -1,12 +1,29 @@
-/// Static identity of the app.
+import 'package:flutter/services.dart';
+
+/// 应用的身份信息。
 ///
-/// Kept as constants (instead of `package_info_plus`) so the about page, the
-/// settings subtitle and the Android build metadata can never drift apart in
-/// a way the user would notice. Bump these together with `pubspec.yaml`.
+/// [version] 与 [buildLabel] **不是写在这里的**：`appBuildName` /
+/// `appBuildNumber` 是编译期常量，值由 Flutter 工具从 `pubspec.yaml` 的
+/// `version:` 取（`0.4.1+8` → `0.4.1` 与 `8`），或取构建时的 `--build-name`
+/// / `--build-number`；两者都在声明处被折进常量，没有一次运行期查询。
+/// 所以**升版本只改 `pubspec.yaml` 一处**。
+///
+/// 它与 APK 的 `versionName` / `versionCode` 同源 —— `android/app/`
+/// 里那两行读的就是 `flutter.versionName` / `flutter.versionCode`，同一个
+/// `version:` 推出来的。应用里显示的版本号因此不可能与实际装着的那个包
+/// 不一致。
+///
+/// 兜底值只在**编译时拿不到这两项**时生效（`pubspec.yaml` 没有 `version:`，
+/// 而且构建时也没给 `--build-name`）—— 那意味着不是经 Flutter 工具编的。
+/// 它们的作用是让这两个字段保持非空，调用方都在拼字符串。
 abstract final class ShuAppInfo {
   static const String name = 'ShuVPN';
-  static const String version = '0.4.1';
-  static const String buildLabel = '8';
+
+  /// 版本名，如 `0.4.1`。
+  static const String version = appBuildName ?? '0.0.0';
+
+  /// 构建号，如 `8`。
+  static const String buildLabel = appBuildNumber ?? '0';
 
   /// 显示用的版本号。括号用**全角**：它只出现在中文语境里（关于页、许可页）。
   static const String versionLabel = '$version（$buildLabel）';
