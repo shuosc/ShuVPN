@@ -4,13 +4,16 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
 import android.net.IpPrefix
 import android.net.VpnService
 import android.os.Build
+import android.os.PowerManager
 import android.system.OsConstants
 import androidx.annotation.RequiresApi
 import java.net.Inet6Address
@@ -69,7 +72,15 @@ class ShuVpnService : VpnService() {
         private const val NOTIFICATION_ID = 0x5348
         private const val ACTION_DISCONNECT = "work.shuvpn.app.action.VPN_DISCONNECT"
 
-        fun start(context: Context) {
+        /**
+         * 起前台服务（幂等），**不**建 TUN。
+         *
+         * 两条数据面共用这一个服务：系统 VPN（建 TUN）与纯本机代理（只靠它
+         * 把进程留在前台）。服务类是 [VpnService] 的子类，因为只有它能调
+         * `Builder.establish()`；纯代理模式下它只是不调而已 —— 平级的第二个
+         * 普通 `Service` 只会多出一条通知、多一套生命周期。
+         */
+        fun attach(context: Context) {
             val intent = Intent(context, ShuVpnService::class.java)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(intent)
@@ -78,7 +89,14 @@ class ShuVpnService : VpnService() {
             }
         }
 
-        fun stop(context: Context) {
+        /**
+         * 停掉服务（连同通知）。
+         *
+         * 调用方要先确认**没有数据面还需要它**（见 `ConnectionController`
+         * 的 `_detachForegroundIfIdle`）：纯代理模式下这一下会把进程的保护
+         * 一并撤掉。
+         */
+        fun detach(context: Context) {
             context.stopService(Intent(context, ShuVpnService::class.java))
         }
     }
@@ -86,9 +104,38 @@ class ShuVpnService : VpnService() {
     private var notificationTitle = "ShuVPN"
     private var disconnectLabel = "断开"
 
+    /**
+     * 通知正文，一行读数（上下行与延迟），由 Dart 侧每秒一次的采样算好送
+     * 过来（见 `ShuVpnNotification`）。
+     *
+     * 它同 [foregrounded]、[screenOn] 一样只在主线程上读写：通道回调、
+     * `onStartCommand` 与广播接收器都在主线程。
+     */
+    private var contentText = "已连接"
+
+    /**
+     * 服务有没有进过前台。Dart 侧的第一帧可能比 `onStartCommand` 先到：
+     * 插件在 worker 线程上轮询到 `activeService` 就返回 fd，那之后 Dart 立即
+     * 推读数，而这一侧的 `startForeground` 排在后面。还没进前台时
+     * [notifyContent] 什么都不做，那一次的文本会由 `onStartCommand` 里的
+     * `startForeground` 带出去。
+     */
+    private var foregrounded = false
+
+    /** 屏幕是不是亮着。息屏时不刷新通知，见 [updateNotification]。 */
+    private var screenOn = true
+
+    /**
+     * 通知上那个时钟的取值，取服务创建的时刻（≈ 这条隧道建起来的时刻）。
+     * **必须固定**：每秒重建通知时让它跟着 `build()` 走，那个位置会永远显示
+     * 刷新时间，而不是这条隧道什么时候建起来的。
+     */
+    private val startedAt = System.currentTimeMillis()
+
     override fun onCreate() {
         super.onCreate()
         activeService = this
+        registerScreenReceiver()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -105,6 +152,7 @@ class ShuVpnService : VpnService() {
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }
+        foregrounded = true
         // **不**用 `START_STICKY`：服务被系统回收意味着 VPN 已经断了
         // （fd 跟着 service 的授权走），自动重启只会留下一个「显示已连接、
         // 实际什么也不通」的前台通知。让通知消失，用户看得见断没断。
@@ -113,7 +161,97 @@ class ShuVpnService : VpnService() {
 
     override fun onDestroy() {
         activeService = null
+        try {
+            unregisterReceiver(screenReceiver)
+        } catch (_: IllegalArgumentException) {
+            // 注册没成功过。拆服务不该因此失败。
+        }
         super.onDestroy()
+    }
+
+    /**
+     * 系统把这条 VPN 撤了（用户在系统设置里关掉、或另一个 VPN 应用抢走了它）。
+     *
+     * 接口此刻已经不在，fd 也跟着无效，但**服务本身不一定要停**：纯代理模式
+     * 与「VPN + 代理」组合下，本机代理还在用同一条隧道。要不要停由 Dart 侧
+     * 判定（它知道还有几个数据面在跑），所以这里**不调 `super.onRevoke()`**
+     * —— 那个默认实现是 `stopSelf()`，会把代理的保护一并撤掉。
+     *
+     * 这个方法不保证跑在主线程（见 `VpnService` 的文档），所以这里只做一件事：
+     * 把事实告诉 Dart 侧。
+     */
+    override fun onRevoke() {
+        ShuVpnPlugin.requestVpnRevoked()
+    }
+
+    /**
+     * 用最新的读数刷新通知正文。
+     *
+     * 由 `shuvpn/vpn` 通道每秒调一次（Dart 侧的采样循环）。
+     *
+     * 屏幕黑着时**只记住不发**：息屏时用户看不见通知，而每秒一次
+     * `NotificationManager` 调用在 Doze 边缘是纯粹的浪费。亮屏那一刻由
+     * [screenReceiver] 补发最新的一条，所以复屏后看到的是当前值，而不是
+     * 息屏前的旧值。
+     *
+     * 门闸放在这一侧而不是 Dart 侧：Flutter 的 `paused` 分不清「息屏」与
+     * 「切到别的应用但屏幕亮着」，而后者的情况下通知栏是**看得见**的。
+     */
+    fun updateNotification(text: String) {
+        if (text.isEmpty()) return
+        if (text == contentText) return
+        contentText = text
+        if (!screenOn) return
+        notifyContent()
+    }
+
+    /** 重建并提交通知。还没进前台时什么都不做，见 [foregrounded]。 */
+    private fun notifyContent() {
+        if (!foregrounded) return
+        try {
+            val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+            manager.notify(NOTIFICATION_ID, buildNotification())
+        } catch (_: Exception) {
+            // 通知权限被拒、或服务正在被拆掉。通知是装饰性的，不该把每秒
+            // 一次的采样循环打断。
+        }
+    }
+
+    /**
+     * 幂等地重投一次通知，绕过 [updateNotification] 那道「内容没变就跳过」
+     * 的判断。
+     *
+     * 通知授权是**事后**才可能到手的：在那之前 post 的那一条进不了通知栏，
+     * 而系统不会补发（拒绝期间的通知不排队）。授权刚到手时（见
+     * `ShuVpnPlugin` 的 `addRequestPermissionsResultListener`）读数字符串
+     * 大概率与上一次相同 —— 隧道空闲时它一直不变 —— 所以那一次补投不能走
+     * 去重那条路。
+     */
+    fun repostNotification() = notifyContent()
+
+    private val screenReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            val interactive = intent?.action == Intent.ACTION_SCREEN_ON
+            if (interactive == screenOn) return
+            screenOn = interactive
+            // 息屏期间攒下的最新读数在这里补发一次。
+            if (interactive) notifyContent()
+        }
+    }
+
+    private fun registerScreenReceiver() {
+        // 初值取系统状态：服务是在屏幕亮着的时候起来的，但这条广播不补发
+        // 一次「当前亮着」。
+        screenOn = (getSystemService(POWER_SERVICE) as? PowerManager)?.isInteractive ?: true
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_ON)
+            addAction(Intent.ACTION_SCREEN_OFF)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(screenReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(screenReceiver, filter)
+        }
     }
 
     /**
@@ -280,6 +418,13 @@ class ShuVpnService : VpnService() {
                 )
             }
         }
+        val contentIntent = PendingIntent.getActivity(
+            this,
+            0,
+            Intent(this, MainActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
         val disconnectIntent = PendingIntent.getService(
             this,
             1,
@@ -292,15 +437,23 @@ class ShuVpnService : VpnService() {
         } else {
             Notification.Builder(this)
         }
-        return builder
+        builder
             .setSmallIcon(android.R.drawable.ic_lock_lock)
             .setContentTitle(notificationTitle)
-            .setContentText("已连接")
+            .setContentText(contentText)
+            .setContentIntent(contentIntent)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
+            .setShowWhen(true)
+            .setWhen(startedAt)
             .addAction(
                 Notification.Action.Builder(null, disconnectLabel, disconnectIntent).build(),
             )
-            .build()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            // 安卓 12 起前台服务通知会被系统最多压后 10 秒才显示，而这一条
+            // 是「VPN 正在跑」的唯一凭据。
+            builder.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
+        }
+        return builder.build()
     }
 }
