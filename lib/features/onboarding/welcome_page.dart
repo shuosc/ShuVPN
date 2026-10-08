@@ -20,23 +20,34 @@ import '../account/login_form.dart';
 ///
 /// 写成枚举（而不是散在页面里的几个常量）是因为这一页有三处要按它对齐：
 /// 行首的图标、行尾的状态词、以及底部按钮的启用条件 —— 共用一份定义，将来
-/// 加权限时才不会漏掉某一处。
+/// 加权限时才不会漏掉某一处。枚举的取值顺序就是清单里的顺序。
 ///
-/// 目前只有一项。Android 上真能申请的也只有它：VPN 服务授权（`VpnService`）。
-/// 通知、电池优化白名单之类将来要加的话，在这里加一个值、在
-/// `_requestPermission` 里补一条分派即可，版式不用动。
+/// 目前两项，都在 Android 上：VPN 服务授权（`VpnService`）与通知授权
+/// （`POST_NOTIFICATIONS`）。电池优化白名单之类将来要加的话，就在这里加一个
+/// 值、在 `_requestPermission` 里补一条分派，版式不用动。
 enum _ShuPermission {
   /// Android 的 `VpnService` 授权 —— 建立隧道的前提。
   vpn(
     icon: Icons.vpn_lock_outlined,
     title: 'VPN 服务',
     description: 'ShuVPN 默认使用 Android 的 VPN 接口建立隧道',
+  ),
+
+  /// 通知授权 —— 隧道运行时那条常驻通知（与它的「断开」按钮）。
+  ///
+  /// 排在 VPN 下面：它要的正是 VPN 建起来之后才会出现的东西。
+  notification(
+    icon: Icons.notifications_outlined,
+    title: '通知',
+    description: '隧道运行时在通知栏显示状态与断开入口',
+    isRequired: false,
   );
 
   const _ShuPermission({
     required this.icon,
     required this.title,
     required this.description,
+    this.isRequired = true,
   });
 
   /// 行首图标 —— 与设置页里「启用 VPN 服务」那一行同一个。
@@ -47,6 +58,13 @@ enum _ShuPermission {
 
   /// 标题下面那行小字：说清这一项是干什么用的。
   final String description;
+
+  /// 拿到它才放行下一页。
+  ///
+  /// 通知是例外：拒绝它只是通知栏里少一条常驻通知，隧道照常工作；而系统
+  /// 最多只弹两次对话框（拒绝两次之后连对话框都不再出现）—— 把它算进
+  /// 门槛，拒绝两次的用户会被**永久**卡在这一页。
+  final bool isRequired;
 }
 
 /// 新用户引导 —— 三页，一页一件事。
@@ -58,27 +76,29 @@ enum _ShuPermission {
 /// | 页 | 内容 | 做完的条件 |
 /// | :--- | :--- | :--- |
 /// | 0 | 这个应用是干什么的 | 按下「继续」 |
-/// | 1 | 逐项申请系统权限 | 列表里的每一项都已授权 |
+/// | 1 | 逐项申请系统权限 | 必需的那几项都已授权 |
 /// | 2 | 登录校园账户 | `ShuLoginForm` 走完并交换到凭据 |
 ///
 /// ## 第 1 页是一张清单，不是一颗按钮
 ///
 /// 它不靠底部按钮去申请：正文是一张**裸列表**（无卡片、无边框），一行一项
-/// 系统权限，**点行本身就是申请**；底部的按钮要到列表全绿才解禁。这样
-/// 「还差哪一项」是看得见的 —— 一颗「去授权」按钮只能告诉用户「有事没做完」。
+/// 系统权限，**点行本身就是申请**；底部的按钮要到**必需**的那几项全绿才
+/// 解禁（通知那一条是可选项，见 [_ShuPermission.isRequired]）。这样「还差
+/// 哪一项」是看得见的 —— 一颗「去授权」按钮只能告诉用户「有事没做完」。
 ///
 /// 行用的形状照抄「账号管理」里那几行凭据（`AccountPage._CredentialRow`）：
 /// `ListTile` + 左侧图标 + 正文 + 右侧 [ShuStatusSlot]。状态的词与色也共用
-/// 同一个函数（[shuVpnPermissionStatus]），所以「已授权」在这一页和在设置页
-/// 逐字逐色一致 —— 用户在两个地方不用各学一次读法。
+/// 那两个函数（[shuVpnPermissionStatus] 与 [shuNotificationPermissionStatus]），
+/// 所以「已授权」在这一页和在设置页逐字逐色一致 —— 用户在两个地方不用各学
+/// 一次读法。
 ///
 /// 状态的真值在 [ConnectionController] 里，这一页只是转述。页面自己再记一份
 /// （「我点过、它答应了」）看着省事，但那是第二个答案：用户到系统设置里把授权
 /// 撤掉之后，页面还挂着一个勾、设置页却已经写着「未授权」。
 ///
-/// 非 Android 上清单为空（没有系统 VPN 这回事），「全部申请到」自动成立、
-/// 按钮直接可点 —— 与 [ConnectionController.ensureVpnPermission] 在非 Android
-/// 上返回 true 是同一条思路：没有这项权限的地方，不该被它挡住。
+/// 非 Android 上清单为空（两项都没有），「全部申请到」自动成立、按钮直接
+/// 可点 —— 与 [ConnectionController.ensureVpnPermission] 在非 Android 上返回
+/// true 是同一条思路：没有这项权限的地方，不该被它挡住。
 ///
 /// ## 版式来源
 ///
@@ -156,27 +176,43 @@ class _ShuWelcomePageState extends State<ShuWelcomePage> {
   /// 授权那件事的唯一真值在 [ConnectionController] 里 —— 这里只是转述。
   ConnectionController get _connection => context.read<ConnectionController>();
 
-  /// 第 1 页要申请的那几项。
+  /// 第 1 页要申请的那几项：这台设备支持的那几项，顺序就是枚举顺序
+  /// （VPN 在上、通知在下）。
   ///
-  /// 非 Android 上是空的：那里没有系统 VPN 授权这回事，清单不该摆出一行
-  /// 永远拿不到的东西。空清单让「全部申请到」自动成立。
+  /// 非 Android 上是空的：那里两项都没有，清单不该摆出永远拿不到的东西。
+  /// 空清单让「全部申请到」自动成立。
   ///
   /// 平台判断问控制器而不是自己看 `Platform`：真要去调原生的就是那一层
-  /// （见 `ShuVpnPermission`），两边各判一次迟早会不一样。
-  List<_ShuPermission> _requirements(ConnectionController connection) =>
-      connection.vpnSupported
-      ? _ShuPermission.values
-      : const <_ShuPermission>[];
+  /// （见 `ShuVpnPermission` 与 `ShuNotificationPermission`），两边各判一次
+  /// 迟早会不一样。
+  List<_ShuPermission> _requirements(ConnectionController connection) => [
+    for (final permission in _ShuPermission.values)
+      if (_supportedOf(connection, permission)) permission,
+  ];
+
+  /// 这一项在这台设备上有没有。
+  bool _supportedOf(
+    ConnectionController connection,
+    _ShuPermission permission,
+  ) => switch (permission) {
+    _ShuPermission.vpn => connection.vpnSupported,
+    _ShuPermission.notification => connection.notificationSupported,
+  };
 
   /// 这一项现在是什么状态。`null` = 还没问过系统。
   bool? _stateOf(ConnectionController connection, _ShuPermission permission) =>
       switch (permission) {
         _ShuPermission.vpn => connection.vpnPrepared,
+        _ShuPermission.notification => connection.notificationGranted,
       };
 
-  /// 清单里的每一项都拿到了 —— 底部按钮据此解禁。
+  /// 清单里**必需**的那几项都拿到了 —— 底部按钮据此解禁。
+  ///
+  /// 可选项（通知）不在此列：它挡不住任何东西，见 [_ShuPermission.isRequired]。
   bool _allGranted(ConnectionController connection) =>
-      _requirements(connection).every((p) => _stateOf(connection, p) == true);
+      _requirements(connection)
+          .where((permission) => permission.isRequired)
+          .every((permission) => _stateOf(connection, permission) == true);
 
   // ------------------------------------------------------------------ 流程
 
@@ -241,13 +277,16 @@ class _ShuWelcomePageState extends State<ShuWelcomePage> {
     // 落到权限页就先问一次系统：授权可能在系统设置里被撤掉（判断真值的
     // 那一层自己也记不住——它每次都要重新问），而这一页的按钮要按真值
     // 解禁。与设置页进入时的做法一样。
-    if (page == 1) unawaited(_connection.refreshVpnPermission());
+    if (page == 1) {
+      unawaited(_connection.refreshVpnPermission());
+      unawaited(_connection.refreshNotificationPermission());
+    }
   }
 
   /// 点第 1 页清单里的某一项：弹系统对话框申请它。
   ///
-  /// **不翻页** —— 翻页是底部按钮的事，而它要等清单全绿才解禁。所以「被拒」
-  /// 的后果只是这一项没打勾：用户可以直接再点一次，拒绝不是终局。
+  /// **不翻页** —— 翻页是底部按钮的事，而它要等必需的那几项全绿才解禁。
+  /// 所以「被拒」的后果只是这一项没打勾：用户可以直接再点一次，拒绝不是终局。
   Future<void> _requestPermission(_ShuPermission permission) async {
     final connection = _connection;
     if (_busy || _stateOf(connection, permission) == true) return;
@@ -255,19 +294,23 @@ class _ShuWelcomePageState extends State<ShuWelcomePage> {
       _busy = true;
       _permissionNotice = null;
     });
-    // 每一项各自的申请入口。现在只有 VPN 一项 —— 走的就是设置页那一个，
-    // 结论也直接写回控制器，页面不会自己再存一份。
+    // 每一项各自的申请入口。VPN 那一项走的就是设置页那一个；结论都直接
+    // 写回控制器，页面不会自己再存一份。
     final requester = switch (permission) {
       _ShuPermission.vpn => connection.requestVpnPermission,
+      _ShuPermission.notification => connection.requestNotificationPermission,
     };
     final granted = await requester();
     if (!mounted) return;
     setState(() {
       _busy = false;
-      // 没拿到时那一行右侧已经写着「未授权」了（状态词由共享函数给），这里
-      // 只需要补上**怎么办** —— 再说一遍「没授权」是同一句话讲两遍。
+      // 没拿到时那一行右侧已经写着状态了（状态词由共享函数给），这里只需要
+      // 补上**怎么办** —— 再说一遍「没授权」是同一句话讲两遍。
       if (!granted) {
-        _permissionNotice = '可以再点一次这一项，或到系统设置的 VPN 里重新授权。';
+        _permissionNotice = switch (permission) {
+          _ShuPermission.vpn => '可以再点一次这一项，或到系统设置的 VPN 里重新授权。',
+          _ShuPermission.notification => '可以再点一次这一项，或到系统设置的通知里重新授权。',
+        };
       }
     });
   }
@@ -528,13 +571,9 @@ class _ShuWelcomePageState extends State<ShuWelcomePage> {
     _ShuPermission permission,
   ) {
     final colors = context.shuyoColors;
-    final prepared = _stateOf(connection, permission);
-    final status = shuVpnPermissionStatus(
-      context,
-      supported: connection.vpnSupported,
-      prepared: prepared,
-    );
-    final actionable = !_busy && prepared != true;
+    final granted = _stateOf(connection, permission);
+    final status = _statusOf(context, connection, permission);
+    final actionable = !_busy && granted != true;
     return ListTile(
       leading: Icon(permission.icon),
       title: Row(
@@ -559,6 +598,27 @@ class _ShuWelcomePageState extends State<ShuWelcomePage> {
       onTap: actionable ? () => _requestPermission(permission) : null,
     );
   }
+
+  /// 这一行右边的状态词与语义色。
+  ///
+  /// 两项各自的词不一样：VPN 没拿到是警示色的「未授权」（它挡着下一页），
+  /// 通知没拿到是中性灰的「可选」（它什么都不挡）。理由写在
+  /// `shuNotificationPermissionStatus` 的类文档里。
+  ({String text, Color color}) _statusOf(
+    BuildContext context,
+    ConnectionController connection,
+    _ShuPermission permission,
+  ) => switch (permission) {
+    _ShuPermission.vpn => shuVpnPermissionStatus(
+      context,
+      supported: connection.vpnSupported,
+      prepared: _stateOf(connection, permission),
+    ),
+    _ShuPermission.notification => shuNotificationPermissionStatus(
+      context,
+      granted: _stateOf(connection, permission),
+    ),
+  };
 
   /// 清单下面那行小字 —— 授权随时可以收回。
   Widget _revokeHint(BuildContext context) => Padding(
@@ -662,9 +722,10 @@ class _ShuWelcomePageState extends State<ShuWelcomePage> {
   );
 
   Widget _footer(BuildContext context, ConnectionController connection) {
-    // 第 1 页要等清单全绿才解禁：授权是这一页存在的理由，允许「跳过」等于
-    // 把第 2 页之后的一切建在沙子上。没解禁时 `onPressed` 为 null ——
-    // `FilledButton` 自己就会画成灰的。
+    // 第 1 页要等**必需**的那几项全绿才解禁：授权是这一页存在的理由，允许
+    // 「跳过」等于把第 2 页之后的一切建在沙子上。可选项（通知）不参与 ——
+    // 它挡不住任何东西。没解禁时 `onPressed` 为 null，`FilledButton` 自己就
+    // 会画成灰的。
     final blocked = _busy || (_page == 1 && !_allGranted(connection));
     return Padding(
       padding: const EdgeInsets.fromLTRB(24, 0, 24, 16),

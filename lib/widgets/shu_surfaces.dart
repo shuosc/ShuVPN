@@ -240,6 +240,26 @@ class ShuSystemTile extends StatelessWidget {
   };
 }
 
+/// 通知授权的**状态词与语义色**。
+///
+/// 读法与 [shuVpnPermissionStatus] 一致，只有「没拿到」那一格不同，而那是
+/// 有意的：通知**不挡任何东西** —— 拒绝它只是通知栏里少一条常驻通知，隧道
+/// 照常工作 —— 所以那里写中性灰的「可选」，不写 `warning` 的「未授权」。
+/// 用警示色说一件没有后果的事，是在谎报严重程度。
+///
+/// `null` 的含义与那边一样：**还没问过系统**。
+({String text, Color color}) shuNotificationPermissionStatus(
+  BuildContext context, {
+  required bool? granted,
+}) {
+  final colors = context.shuyoColors;
+  return switch (granted) {
+    true => (text: '已授权', color: colors.accent),
+    false => (text: '可选', color: colors.textTertiary),
+    null => (text: '检查中…', color: colors.textTertiary),
+  };
+}
+
 /// Neutral placeholder for a feature that has no data yet.
 class EmptyState extends StatelessWidget {
   const EmptyState({

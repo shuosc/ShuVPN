@@ -12,7 +12,8 @@
 //      不是另写的一份。
 //
 // 第 1 页的真授权路径要弹出系统对话框，测不了；但授权那一层的接口
-// （`ShuVpnPermission`）是可以换掉的，最后一组用例走的就是它。
+// （`ShuVpnPermission` 与 `ShuNotificationPermission`）是可以换掉的，
+// 最后一组用例走的就是它们。
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -23,6 +24,7 @@ import 'package:shuvpn/app/router.dart';
 import 'package:shuvpn/app/theme.dart';
 import 'package:shuvpn/core/account/account_center.dart';
 import 'package:shuvpn/core/connection/connection_controller.dart';
+import 'package:shuvpn/core/connection/notification_permission.dart';
 import 'package:shuvpn/core/connection/protocol.dart';
 import 'package:shuvpn/core/connection/vpn_permission.dart';
 import 'package:shuvpn/core/logging/shu_log.dart';
@@ -81,14 +83,47 @@ class _FakeVpnPermission extends ShuVpnPermission {
   }
 }
 
-/// 只把引导页拎出来跑，并替掉系统 VPN 授权那一层。
+/// 替掉通知授权那一层。理由与形状都与 [_FakeVpnPermission] 一样 —— 缺了
+/// 它，「通知」那一行在桌面宿主上根本不会出现（`Platform.isAndroid` 是
+/// false），点它、看它变成「已授权」这些路径一条也测不到。
+class _FakeNotificationPermission extends ShuNotificationPermission {
+  /// 系统现在允许不允许 —— 进页时查出来的就是它。
+  bool granted = false;
+
+  /// 下一次 [request] 会不会答应。
+  bool grants = false;
+
+  /// 被弹了几次对话框。
+  int requested = 0;
+
+  @override
+  bool get isSupported => true;
+
+  @override
+  Future<bool> isGranted() async => granted;
+
+  @override
+  Future<bool> request() async {
+    requested++;
+    // 真的系统也是这样：答应了就一直是答应着的，下一次查就是 true。
+    if (grants) granted = true;
+    return granted;
+  }
+}
+
+/// 只把引导页拎出来跑，并替掉两项授权那两层。
 ///
 /// 为什么能这么测：引导页对外的依赖只有三个 provider，而「点了但没授权」
 /// 这条路径里它们**一个都不会被真的用到**（除了 `ConnectionController`
 /// 自己）—— 页面停在第 1 页，既不写设置也不跳转。
+///
+/// [notification] 不传时也是一个替身（而不是真的那一层）：真那一层的
+/// `isSupported` 在桌面宿主机上是 false，通知那一行就不会出现 —— 而那些
+/// 用例测的是**有那一行**时的样子。
 Future<void> _pumpStandalone(
   WidgetTester tester, {
   required _FakeVpnPermission vpn,
+  _FakeNotificationPermission? notification,
 }) async {
   await _viewport(tester);
   SharedPreferences.setMockInitialValues(<String, Object>{});
@@ -106,6 +141,8 @@ Future<void> _pumpStandalone(
               loginDomain: settings.loginDomain,
             ),
             vpnPermission: vpn,
+            notificationPermission:
+                notification ?? _FakeNotificationPermission(),
           ),
         ),
         ChangeNotifierProvider<AccountCenter>(
@@ -316,6 +353,72 @@ void main() {
       // 这一下才翻得到登录页。
       await _tap(tester, '继续');
       expect(find.text('登录校园账户'), findsOneWidget);
+    });
+  });
+
+  group('通知授权这一步', () {
+    testWidgets('排在 VPN 下面；点了才申请，拒绝不会挡住「继续」', (tester) async {
+      final vpn = _FakeVpnPermission();
+      final notification = _FakeNotificationPermission();
+      await _pumpStandalone(tester, vpn: vpn, notification: notification);
+
+      await _tap(tester, '继续');
+      expect(find.text('VPN 服务'), findsOneWidget);
+      expect(find.text('通知'), findsOneWidget);
+      // 顺序：通知在 VPN 下面。
+      expect(
+        tester.getTopLeft(find.text('通知')).dy,
+        greaterThan(tester.getTopLeft(find.text('VPN 服务')).dy),
+      );
+      // 没给的时候说的是「可选」而不是「未授权」—— 它不挡任何东西。
+      expect(find.text('可选'), findsOneWidget);
+      expect(find.text('未授权'), findsOneWidget);
+
+      await _tap(tester, '通知');
+      expect(notification.requested, 1);
+      // 补救提示只说通知那一处，不说 VPN。
+      expect(find.textContaining('到系统设置的通知里重新授权'), findsOneWidget);
+      expect(find.text('可选'), findsOneWidget);
+
+      // 拒绝通知不挡路：给 VPN 授权之后按钮一样解禁。
+      vpn.grants = true;
+      await _tap(tester, 'VPN 服务');
+      expect(_footerButton(tester).onPressed, isNotNull);
+
+      await _tap(tester, '继续');
+      expect(find.text('登录校园账户'), findsOneWidget);
+    });
+
+    testWidgets('拿到之后变成「已授权」，但它从不解禁按钮', (tester) async {
+      final vpn = _FakeVpnPermission();
+      final notification = _FakeNotificationPermission()..grants = true;
+      await _pumpStandalone(tester, vpn: vpn, notification: notification);
+
+      await _tap(tester, '继续');
+      await _tap(tester, '通知');
+
+      expect(notification.requested, 1);
+      expect(find.text('已授权'), findsOneWidget);
+      expect(find.text('可选'), findsNothing);
+      expect(find.textContaining('到系统设置的通知里重新授权'), findsNothing);
+      // VPN 还没给，按钮仍然置灰 —— 通知不参与门槛。
+      expect(_footerButton(tester).onPressed, isNull);
+
+      vpn.grants = true;
+      await _tap(tester, 'VPN 服务');
+      expect(_footerButton(tester).onPressed, isNotNull);
+    });
+
+    testWidgets('进页先问一次系统：本来就允许的设备不用再点', (tester) async {
+      final vpn = _FakeVpnPermission();
+      final notification = _FakeNotificationPermission()..granted = true;
+      await _pumpStandalone(tester, vpn: vpn, notification: notification);
+
+      await _tap(tester, '继续');
+
+      expect(find.text('已授权'), findsOneWidget);
+      expect(find.text('可选'), findsNothing);
+      expect(notification.requested, 0);
     });
   });
 }
