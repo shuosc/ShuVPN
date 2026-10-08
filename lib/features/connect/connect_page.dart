@@ -10,7 +10,7 @@ import '../../app/shuyo_text_styles.dart';
 import '../../app/theme.dart';
 import '../../core/connection/connection_controller.dart';
 import '../../core/connection/protocol.dart';
-import '../../core/connection/vpn_packet_log.dart';
+import '../../core/connection/vpn_notification.dart';
 import '../../core/settings/settings_store.dart';
 import '../../widgets/shu_app_bar.dart';
 import '../../widgets/shu_surfaces.dart';
@@ -1055,13 +1055,14 @@ class _ConnectionStatusRow extends StatelessWidget {
       _ when !usable => '无可用协议',
       _ => protocol.label,
     };
-    // 副标题：这一行是**补充**。
+    // 副标题：这一行是**补充**。已连接时那串读数与系统通知的正文同一个
+    // 函数（`formatConnectionTelemetry`）—— 通知栏与这张抽屉会同时被看到。
     final subtitle = switch (controller.state) {
-      SangforConnectionState.connected =>
-        '↑ ${formatRate(controller.uploadBytesPerSecond)}'
-            ' · ↓ ${formatRate(controller.downloadBytesPerSecond)}'
-            ' · 时延 '
-            '${controller.latencyMs == null ? '—' : '${controller.latencyMs!.round()} ms'}',
+      SangforConnectionState.connected => formatConnectionTelemetry(
+        upBytesPerSecond: controller.uploadBytesPerSecond,
+        downBytesPerSecond: controller.downloadBytesPerSecond,
+        latencyMs: controller.latencyMs,
+      ),
       SangforConnectionState.error =>
         '${protocol.label} · ${controller.draft.server}',
       _ when !usable => '去设置里启用一个协议',

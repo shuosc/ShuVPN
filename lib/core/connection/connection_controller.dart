@@ -15,11 +15,14 @@ import '../auth/auth_session.dart';
 import '../logging/shu_log.dart';
 import '../settings/settings_store.dart';
 import 'atrust_channel_probe.dart';
+import 'foreground_service.dart';
+import 'notification_permission.dart';
 import 'protocol.dart';
 import 'proxy_listen.dart';
 import 'shu_android_vpn.dart';
 import 'shu_http_proxy.dart';
 import 'shu_traffic.dart';
+import 'vpn_notification.dart';
 import 'vpn_packet_log.dart';
 import 'vpn_permission.dart';
 import 'vpn_routes.dart';
@@ -86,7 +89,10 @@ class ConnectionController extends ChangeNotifier {
     this._settings, {
     ConnectionDraft? draft,
     ShuVpnPermission? vpnPermission,
+    ShuNotificationPermission? notificationPermission,
   }) : _vpnPermission = vpnPermission ?? const ShuVpnPermission(),
+       _notificationPermission =
+           notificationPermission ?? const ShuNotificationPermission(),
        _draft = draft ?? _draftFrom(_settings) {
     // 设置页改完协议开关或服务器地址之后，这一层要立刻知道 ——
     // 「关掉当前协议 → 自动切到另一个可用的」就发生在这个回调里。
@@ -97,6 +103,9 @@ class ConnectionController extends ChangeNotifier {
 
   /// 系统 VPN 授权那一层。默认打给原生；测试换掉它（见 `ShuVpnPermission`）。
   final ShuVpnPermission _vpnPermission;
+
+  /// 通知授权那一层。默认打给原生；测试换掉它（见 `ShuNotificationPermission`）。
+  final ShuNotificationPermission _notificationPermission;
 
   /// 从设置里拼出初始草稿。
   static ConnectionDraft _draftFrom(SettingsStore settings) => ConnectionDraft(
@@ -221,6 +230,15 @@ class ConnectionController extends ChangeNotifier {
   /// 调原生的就是这一层，两边各判一次迟早会不一样。
   bool get vpnSupported => _vpnPermission.isSupported;
 
+  /// 「通知允许了没」；`null` = 还没问过系统。
+  ///
+  /// 这一项是**可选**的：拒绝它只是通知栏里少一条常驻通知，隧道照常工作。
+  /// 界面据此把它说成「可选」而不是「未授权」（见
+  /// `shuNotificationPermissionStatus`）。
+  bool? get notificationGranted => _notificationGranted;
+
+  /// 这台设备有没有「通知授权」这回事 —— 只有 Android 有。
+  bool get notificationSupported => _notificationPermission.isSupported;
   int? _boundSocksPort;
 
   /// 代理**实际绑定**的那个地址；没在跑时为 `null`。
@@ -333,6 +351,9 @@ class ConnectionController extends ChangeNotifier {
   /// VPN 之外（`addDisallowedApplication`）。
   final ShuTrafficMeter _meter = ShuTrafficMeter();
 
+  /// 系统通知栏那一块：把每秒钟的读数送过去，内容没变就不送。
+  final ShuVpnNotification _vpnNotification = ShuVpnNotification();
+
   /// 每秒采一次速率的定时器。隧道建立之后才开，拆掉就停 —— 一个不在
   /// 连接中的设备不该每秒醒一次。
   Timer? _statsTimer;
@@ -399,8 +420,25 @@ class ConnectionController extends ChangeNotifier {
   /// 它必须跟着 VPN 一起停：终结器持有的那些连接会一直读隧道，留着它们
   /// 就是在替一个已经被关掉的接口转发字节。
   SangforTcpTerminator? _vpnTerminator;
-  StreamSubscription<void>? _vpnDisconnectSub;
+  StreamSubscription<void>? _vpnRevokeSub;
   bool? _vpnPrepared;
+
+  /// 通知栏那个「断开」按钮的订阅。
+  ///
+  /// 它的寿命是**那条通知**的寿命（前台服务在不在），不是 VPN 数据面的
+  /// 寿命：纯代理模式下通知同样在，而那颗按钮同样得能用 —— 挂在 `startVpn`
+  /// 里的话，VPN 关着时点它什么都不发生。
+  StreamSubscription<void>? _notificationSub;
+
+  /// 前台服务这一格。两个数据面共用它，见 [ShuForegroundService]。
+  ///
+  /// 它**不**等于 [vpnRunning]：纯代理模式（VPN 关、只开 SOCKS5 或 HTTP）
+  /// 也要那条常驻通知 —— 前台服务是「进程不会被后台回收」的唯一凭据，而
+  /// 本机代理是 `dart:io` 的 `ServerSocket`，进程一走端口就没了。
+  final ShuForegroundService _foreground = ShuForegroundService();
+
+  /// [notificationGranted] 背后的值。见那里。
+  bool? _notificationGranted;
 
   /// 交给系统的路由表（就是网关资源表展开后的网段）。
   List<String> _vpnTunnelRoutes = const <String>[];
@@ -461,12 +499,17 @@ class ConnectionController extends ChangeNotifier {
     _proxyToken?.cancel('controller disposed');
     _httpToken?.cancel('controller disposed');
     _vpnToken?.cancel('controller disposed');
+    // 三条数据面在下面几行全部拆掉，所以服务不可能还「被需要」：不显式撤的
+    // 话，前台服务会让**进程**留在那里，通知栏上于是挂着一条指向什么都不通
+    // 的「已连接」。
+    unawaited(_foreground.releaseIfIdle(stillNeeded: false));
     unawaited(_socks5?.close().catchError((Object _) {}));
     unawaited(_httpProxy?.close().catchError((Object _) {}));
     unawaited(_vpnTerminator?.close().catchError((Object _) {}));
     unawaited(_vpnRouter?.stop().catchError((Object _) {}));
     unawaited(_vpnDevice?.close().catchError((Object _) {}));
-    unawaited(_vpnDisconnectSub?.cancel());
+    unawaited(_notificationSub?.cancel());
+    unawaited(_vpnRevokeSub?.cancel());
     _socks5 = null;
     _httpProxy = null;
     _boundHttpPort = null;
@@ -1191,6 +1234,10 @@ class ConnectionController extends ChangeNotifier {
       _boundHttpListen = listen;
       _httpToken = token;
       _advertisedHost = advertised;
+      // 纯代理（VPN 关着）也要常驻通知：前台服务是进程不被后台回收的唯一
+      // 凭据，而这些服务器是 `dart:io` 的 `ServerSocket` —— 进程一走端口
+      // 就没了，界面却还写着「已连接」。
+      await _ensureForeground();
       ShuLog.i(
         ShuLogTag.proxy,
         'HTTP 代理已监听 ${listen.address}:$_boundHttpPort'
@@ -1252,6 +1299,8 @@ class ConnectionController extends ChangeNotifier {
       _boundSocksPort = port;
       _boundSocksListen = listen;
       _advertisedHost = advertised;
+      // 与 HTTP 那一条同一个理由：纯代理模式也要有那条常驻通知。
+      await _ensureForeground();
       ShuLog.i(
         ShuLogTag.proxy,
         'SOCKS5 代理已监听 ${listen.address}:$port'
@@ -1277,6 +1326,7 @@ class ConnectionController extends ChangeNotifier {
     await _stopHttpProxy();
     await _stopSocksProxy();
     _reportProxyRouting();
+    await _detachForegroundIfIdle();
     if (!_busy) notifyListeners();
   }
 
@@ -1284,6 +1334,7 @@ class ConnectionController extends ChangeNotifier {
   Future<void> stopHttpProxy() async {
     if (_httpProxy == null) return;
     await _stopHttpProxy();
+    await _detachForegroundIfIdle();
     if (!_busy) notifyListeners();
   }
 
@@ -1291,6 +1342,7 @@ class ConnectionController extends ChangeNotifier {
   Future<void> stopSocksProxy() async {
     if (_socks5 == null) return;
     await _stopSocksProxy();
+    await _detachForegroundIfIdle();
     if (!_busy) notifyListeners();
   }
 
@@ -1358,12 +1410,16 @@ class ConnectionController extends ChangeNotifier {
   /// 增量会是「连接建立之前的所有字节」，界面上会闪出一个假的高峰。
   /// 时延跟着同一时机清零：它与速率一样是「这一条连接现在怎么样」的读数，
   /// 跨连接留着的旧值（换了网关的、上一次会话的）会让它答错。
+  ///
+  /// 通知那一侧的缓存同时作废：新隧道的第一帧读数不能因为与上一条隧道
+  /// 留下的文本恰好相同而被丢掉。
   void _startStats() {
     _statsUpBytes = trafficUpBytes;
     _statsDownBytes = trafficDownBytes;
     _uploadRate = 0;
     _downloadRate = 0;
     _meter.resetLatency();
+    _vpnNotification.reset();
     _statsTimer ??= Timer.periodic(
       const Duration(seconds: 1),
       (_) => _tickStats(),
@@ -1389,6 +1445,23 @@ class ConnectionController extends ChangeNotifier {
     _uploadRate = _uploadRate * 0.4 + deltaUp * 0.6;
     _downloadRate = _downloadRate * 0.4 + deltaDown * 0.6;
     notifyListeners();
+    _syncTunnelNotification();
+  }
+
+  /// 把当前读数推给系统通知栏。
+  ///
+  /// 判据是**前台服务在不在**（[ShuForegroundService.attached]）而不是「系统
+  /// VPN 在不在跑」：纯代理模式下通知一样在，而它是用户看到「代理还活着」的
+  /// 唯一凭据。
+  void _syncTunnelNotification() {
+    if (!_foreground.attached) return;
+    unawaited(
+      _vpnNotification.push(
+        upBytesPerSecond: _uploadRate,
+        downBytesPerSecond: _downloadRate,
+        latencyMs: latencyMs,
+      ),
+    );
   }
 
   /// 监听地址或端口改了：已经跑着就按新值重新绑一次。
@@ -1445,7 +1518,7 @@ class ConnectionController extends ChangeNotifier {
     return null;
   }
 
-  // ------------------------------------------------------------ VPN（安卓）
+  // -------------------------------------------------- VPN 与通知（安卓）
 
   /// 问一次系统「VPN 权限给了没」。
   ///
@@ -1497,6 +1570,46 @@ class ConnectionController extends ChangeNotifier {
     if (!vpnSupported) return true;
     if (await refreshVpnPermission()) return true;
     return requestVpnPermission();
+  }
+
+  /// 问一次系统「通知允许了没」。
+  ///
+  /// 与 [refreshVpnPermission] 同一个理由：用户随时可以在系统设置里关掉
+  /// 通知，缓存一个值就等于漏掉那种情况。
+  Future<bool> refreshNotificationPermission() async {
+    if (!notificationSupported) {
+      _notificationGranted = false;
+      notifyListeners();
+      return false;
+    }
+    try {
+      _notificationGranted = await _notificationPermission.isGranted();
+    } on Object catch (error) {
+      ShuLog.w(ShuLogTag.vpn, '查询通知授权失败：$error');
+      _notificationGranted = false;
+    }
+    notifyListeners();
+    return _notificationGranted ?? false;
+  }
+
+  /// 弹系统的通知授权对话框。
+  ///
+  /// 已允许、或系统没有这个对话框（Android 13 以下）时，原生侧直接回当前
+  /// 状态、**不弹**，所以重复调用是安全的。
+  Future<bool> requestNotificationPermission() async {
+    if (!notificationSupported) return false;
+    try {
+      final granted = await _notificationPermission.request();
+      _notificationGranted = granted;
+      if (!granted) {
+        ShuLog.i(ShuLogTag.vpn, '通知未获允许，隧道运行时不会有常驻通知');
+      }
+      notifyListeners();
+      return granted;
+    } on Object catch (error) {
+      ShuLog.w(ShuLogTag.vpn, '请求通知授权失败：$error');
+      return false;
+    }
   }
 
   /// 用 Android 的 `VpnService` 把整机流量接到隧道上。
@@ -1630,6 +1743,15 @@ class ConnectionController extends ChangeNotifier {
         onError: (error) => ShuLog.w(ShuLogTag.vpn, 'TCP 终结器出错：$error'),
       );
 
+      // 服务是**原生侧**起的（`start` 的第一步就是 attach），而它可能先于
+      // 失败发生。提前记下这一笔：接口没建成时收尾才撤得掉它，否则通知栏
+      // 会留下一条什么都不通的「已连接」。记早了没有代价 —— 服务确实没起来
+      // 时，收尾那次 `stop` 是一次空操作。
+      //
+      // 这条路不会经过 `_ensureForeground`（它只服务两条本机代理），所以
+      // 那颗「断开」的订阅也要在这里补上 —— 漏了它，VPN 模式下通知栏那颗
+      // 按钮就是死的。
+      _noteNativeForeground();
       final device = await ShuAndroidVpn.start(
         address: address,
         prefixLength: 32,
@@ -1640,6 +1762,9 @@ class ConnectionController extends ChangeNotifier {
         disconnectLabel: '断开',
       );
       if (device == null) {
+        // 服务起来了、接口却没建成：把服务收掉，别留下一条什么都不通的
+        // 「已连接」 —— 代理还在跑的话 `_detachForegroundIfIdle` 会留住它。
+        await _detachForegroundIfIdle();
         _fail(SangforErrorCode.unsupported, '系统未授予 VPN 权限');
         return false;
       }
@@ -1678,9 +1803,8 @@ class ConnectionController extends ChangeNotifier {
       _vpnRouter = router;
       _vpnToken = token;
       _vpnTerminator = terminator;
-      _vpnDisconnectSub = ShuAndroidVpn.disconnectRequests.listen((_) {
-        ShuLog.i(ShuLogTag.vpn, '通知栏请求断开');
-        unawaited(disconnect());
+      _vpnRevokeSub = ShuAndroidVpn.vpnRevocations.listen((_) {
+        unawaited(_handleVpnRevoked());
       });
       ShuLog.i(
         ShuLogTag.vpn,
@@ -1699,11 +1823,21 @@ class ConnectionController extends ChangeNotifier {
             : '只接管 IPv4 · IPv6 已放行走底层网络。不放行的话系统会默认把'
                   '整族 IPv6 封死',
       );
+      // 立刻推第一帧：否则通知会先停在原生侧那句「已连接」上，要等第一次
+      // 采样（一秒之后）才换成读数行。
+      _syncTunnelNotification();
       return true;
     } on SangforException catch (error) {
+      // 建到一半的东西（fd、路由、终结器）与刚拉起来的服务都要收掉，
+      // 否则屏幕上会留下一条「已连接」而下面什么都不通。代理还在跑的话
+      // `_detachForegroundIfIdle` 会把服务留住 —— 它还要靠这条隧道。
+      await _stopVpnPlane();
+      await _detachForegroundIfIdle();
       _fail(error.code, error.message);
       return false;
     } on Object catch (error) {
+      await _stopVpnPlane();
+      await _detachForegroundIfIdle();
       _fail(SangforErrorCode.unknown, '启动 VPN 服务失败：$error');
       return false;
     } finally {
@@ -1713,19 +1847,27 @@ class ConnectionController extends ChangeNotifier {
   }
 
   Future<void> stopVpn() async {
+    await _stopVpnPlane();
+    // 代理可能还在用同一条隧道（纯代理模式、或刚把 VPN 开关关掉的组合模式）
+    // ——服务要不要停由这一行判定，而不是由接口的生死决定。
+    await _detachForegroundIfIdle();
+  }
+
+  /// 拆掉系统 VPN 这一条数据面（接口、转发、终结器、撤回订阅），不碰服务。
+  Future<void> _stopVpnPlane() async {
     final device = _vpnDevice;
     _vpnDevice = null;
     final router = _vpnRouter;
     _vpnRouter = null;
     final token = _vpnToken;
     _vpnToken = null;
-    final sub = _vpnDisconnectSub;
-    _vpnDisconnectSub = null;
+    final revokeSub = _vpnRevokeSub;
+    _vpnRevokeSub = null;
     final terminator = _vpnTerminator;
     _vpnTerminator = null;
     final observer = _vpnObserver;
     _vpnObserver = null;
-    await sub?.cancel();
+    await revokeSub?.cancel();
     token?.cancel('vpn stopped');
     // 终结器先停：它持有的那几条连接会一直往隧道里读字节，而出口马上就
     // 不在了。它只拆自己的会话，**不碰**底层隧道 —— 那条隧道的生命周期
@@ -1747,11 +1889,86 @@ class ConnectionController extends ChangeNotifier {
     }
     // 数据面的账在 observer 那里 —— 先让它把这次会话小结写完，再丢弃它。
     observer?.finish();
-    ShuLog.i(ShuLogTag.vpn, 'VPN 已停止');
+    // 什么都没建起来时（失败路径上叫过来的）不写这一行：它会让日志看起来
+    // 像「刚跑完一条隧道又把它停了」。
+    if (device != null || router != null || terminator != null) {
+      ShuLog.i(ShuLogTag.vpn, 'VPN 已停止');
+    }
     // 统计与路由表跟着接口一起归零：留着上一轮的计数会让界面看起来
     // 像是「还连着」。
     _vpnTunnelRoutes = const <String>[];
     if (!_busy) notifyListeners();
+  }
+
+  // ------------------------------------------------- 前台服务（两种模式共用）
+
+  /// 把前台服务拉起来（幂等），刚起来时顺手推第一帧通知内容。
+  ///
+  /// 它保的是**进程**：应用只是被切到后台（Activity 停在 paused）时，前台
+  /// 服务让系统不把进程回收，代理与通知都照常。从最近任务里划掉是这条保护
+  /// 的边界 —— 那一下会把 Activity 连同 Flutter 引擎一起销毁，Dart 侧整个
+  /// 停摆，而这是这一层拦不住的事。
+  Future<void> _ensureForeground() async {
+    _listenForNotificationActions();
+    if (!await _foreground.attach()) return;
+    // 通知不能先停在原生侧那句「已连接」上，等一秒后第一次采样才换成读数行。
+    _syncTunnelNotification();
+  }
+
+  /// 记下「前台服务已经由原生侧起来了」，并把通知栏那颗「断开」订阅上。
+  ///
+  /// 两条路都会走到这里：系统 VPN（`ShuAndroidVpn.start` 的第一步就是
+  /// attach）与两条本机代理（[_ensureForeground]）。前者在调用**之前**记
+  /// —— 接口建失败时收尾才撤得掉服务。
+  void _noteNativeForeground() {
+    _foreground.markAttached();
+    _listenForNotificationActions();
+  }
+
+  /// 订阅通知栏那颗「断开」。
+  ///
+  /// 幂等：两条代理各自的启动路径都会走到这里，而服务可能已经被另一条
+  /// 拉起来了（[ShuForegroundService.attach] 那时返回 false）——订阅挂在
+  /// 「有没有订阅过」上，不挂在「这一下有没有把它拉起来」上。
+  void _listenForNotificationActions() {
+    _notificationSub ??= ShuAndroidVpn.disconnectRequests.listen((_) {
+      ShuLog.i(ShuLogTag.vpn, '通知栏请求断开');
+      unawaited(disconnect());
+    });
+  }
+
+  /// 已经没有数据面需要它了就把前台服务停掉。
+  ///
+  /// 判据是**三个数据面全停**：系统 VPN 的接口、本机 SOCKS5、本机 HTTP。
+  /// 漏判一个的后果是通知栏上留着一条「已连接」而实际什么都没在转；反过来
+  /// 多停一次的后果是把还在用的代理连同进程保护一起撤掉 —— 两种都算错，
+  /// 所以这两个都不是设置值，而是那三个字段本身。
+  ///
+  /// 服务真的下去了，那颗「断开」的订阅也跟着撤：它服务的是那条已经不在了
+  /// 的通知。
+  Future<void> _detachForegroundIfIdle() async {
+    await _foreground.releaseIfIdle(
+      stillNeeded: _vpnDevice != null || socksProxyRunning || httpProxyRunning,
+    );
+    if (_foreground.attached) return;
+    final sub = _notificationSub;
+    _notificationSub = null;
+    await sub?.cancel();
+  }
+
+  /// 系统把这条 VPN 撤了（用户在系统设置里关掉、或另一个 VPN 应用抢走）。
+  ///
+  /// TUN 接口已经被系统拆掉、fd 也失效了，但**服务与隧道都还在**：本机代理
+  /// 可能正靠它们服务着别的应用。所以这里只停 VPN 这一条数据面，代理原样
+  /// 继续；一个都没剩时 [stopVpn] 那条尾已会把服务一起收掉。
+  Future<void> _handleVpnRevoked() async {
+    if (_vpnDevice == null) return;
+    ShuLog.w(
+      ShuLogTag.vpn,
+      '系统撤回了 VPN 授权：接口已被系统拆掉。'
+      '${proxyRunning ? '本机代理继续跑' : ''}',
+    );
+    await stopVpn();
   }
 
   Future<void> toggleVpn() async {

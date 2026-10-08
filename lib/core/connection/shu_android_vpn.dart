@@ -40,6 +40,8 @@ class ShuAndroidVpn {
 
   static final StreamController<void> _disconnectRequests =
       StreamController<void>.broadcast();
+  static final StreamController<void> _vpnRevocations =
+      StreamController<void>.broadcast();
   static bool _handlerInstalled = false;
 
   /// 用户在通知栏点了「断开」。
@@ -48,12 +50,25 @@ class ShuAndroidVpn {
     return _disconnectRequests.stream;
   }
 
+  /// 系统把这条 VPN 撤了：用户在系统设置里关掉，或者另一个 VPN 应用抢走了它。
+  ///
+  /// 那一刻 TUN 接口已经不在，fd 也跟着无效（见 `ShuVpnService.onRevoke`）——
+  /// 但**服务本身还在**：纯代理模式与「VPN + 代理」组合下，本机代理还在用
+  /// 同一条隧道，所以要不要停服务由 `ConnectionController` 判定。
+  static Stream<void> get vpnRevocations {
+    _installHandler();
+    return _vpnRevocations.stream;
+  }
+
   static void _installHandler() {
     if (_handlerInstalled) return;
     _handlerInstalled = true;
     _channel.setMethodCallHandler((call) async {
-      if (call.method == 'disconnectRequested') {
-        _disconnectRequests.add(null);
+      switch (call.method) {
+        case 'disconnectRequested':
+          _disconnectRequests.add(null);
+        case 'vpnRevoked':
+          _vpnRevocations.add(null);
       }
       return null;
     });
@@ -66,6 +81,25 @@ class ShuAndroidVpn {
   /// 弹系统授权对话框。**需要一个前台页面**，否则原生侧会回 `no_activity`。
   static Future<bool> requestPermission() async =>
       await _channel.invokeMethod<bool>('requestPermission') ?? false;
+
+  /// 起前台服务，**不**建 TUN。幂等。
+  ///
+  /// 纯代理（SOCKS5 / HTTP）模式下需要它：前台服务是「进程不会被后台回收」
+  /// 的唯一凭据，而那两个服务器是 `dart:io` 的 `ServerSocket` —— 进程一走，
+  /// 端口就没了，而界面还写着「已连接」。
+  ///
+  /// 服务类是 `VpnService` 的子类，所以纯代理模式也走得通（它只是不调
+  /// `establish()`）—— 这正是两种模式共用一条通知、一个生命周期的原因：
+  /// 只有 `VpnService` 能建 TUN，而平级的第二个服务只会多出一条通知。
+  static Future<void> attachForeground() =>
+      _channel.invokeMethod<void>('attachForeground');
+
+  /// 停掉服务（关接口、撤掉通知栏）。
+  ///
+  /// 它撤的是**服务**，不是 TUN 接口 —— 两件事已经拆开了：接口的生死归
+  /// [ShuAndroidVpnDevice.close]，服务的生死归「还有没有数据面需要它」（见
+  /// `ConnectionController._detachForegroundIfIdle`）。
+  static Future<void> detachForeground() => _channel.invokeMethod<void>('stop');
 
   /// 起服务、建 TUN，返回包设备；没有授权或建立失败时返回 `null`。
   ///
@@ -107,14 +141,39 @@ class ShuAndroidVpn {
     return ShuAndroidVpnDevice.fromFd(fd);
   }
 
-  /// 停掉服务（关接口、撤掉通知栏）。
-  static Future<void> stop() => _channel.invokeMethod<void>('stop');
+  /// 更新通知栏正文。
+  ///
+  /// [text] 就是那一行读数（见 `formatConnectionTelemetry`）。VPN 没在跑时
+  /// 原生侧没有服务可更新，静默丢弃 —— 隧道拆掉的那一刻还可能有一两帧在
+  /// 路上，那不是错误。
+  static Future<void> updateNotification({required String text}) =>
+      _channel.invokeMethod<void>('updateNotification', <String, Object?>{
+        'text': text,
+      });
+
+  /// 系统有没有允许本应用发通知。
+  ///
+  /// 原生侧问的是 `NotificationManager.areNotificationsEnabled()`，不直接查
+  /// `POST_NOTIFICATIONS`：前者把「Android 13+ 的运行期权限」与「更低版本里
+  /// 用户在系统设置里关掉了通知」合成同一个答案 —— 而那个答案正是「隧道那
+  /// 条常驻通知到底会不会出现」。
+  static Future<bool> get isNotificationGranted async =>
+      await _channel.invokeMethod<bool>('notificationGranted') ?? false;
+
+  /// 弹系统的通知授权对话框，返回用户的选择。
+  ///
+  /// 已经允许、或系统没有这个对话框（Android 13 以下）时原生侧不弹、直接回
+  /// 当前状态。对话框需要一个前台页面，后台调用会拿到 `no_activity`。
+  static Future<bool> requestNotificationPermission() async =>
+      await _channel.invokeMethod<bool>('requestNotificationPermission') ??
+      false;
 }
 
 /// 把原生交过来的 TUN 描述符包成 [SangforPacketDevice]。
 ///
-/// 与 `AndroidVpnDevice` 的差别只在 [close]：它关掉 fd 之后还要通知原生
-/// 停掉 `VpnService`，否则通知栏会留下来、系统也认为 VPN 仍然挂着。
+/// [close] 只关接口，**不**停服务。服务可能还被本机代理用着（纯代理模式、
+/// 以及「VPN 关了但代理还开着」那一下），停它要等最后一个数据面也收工 ——
+/// 而那件事只有 `ConnectionController` 知道。
 class ShuAndroidVpnDevice implements SangforPacketDevice {
   ShuAndroidVpnDevice._(this._device);
 
@@ -133,8 +192,5 @@ class ShuAndroidVpnDevice implements SangforPacketDevice {
   Future<void> send(Uint8List packet) => _device.send(packet);
 
   @override
-  Future<void> close() async {
-    await _device.close();
-    await ShuAndroidVpn.stop();
-  }
+  Future<void> close() => _device.close();
 }
