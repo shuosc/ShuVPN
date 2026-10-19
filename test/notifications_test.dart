@@ -381,6 +381,8 @@ void main() {
       expect(find.text('公告 a9'), findsOneWidget);
       // 续页取的是站点自己在分页里给的地址，不是客户端算出来的页码。
       expect(client.requestedPages, <Uri?>[null, Uri.parse(second)]);
+      // 新增条目会把末尾挤出视口；懒加载列表要滚到新的末尾才会创建它。
+      await _scrollToBottom(tester);
       expect(
         find.byKey(NotificationsPage.listEndKey),
         findsOneWidget,
