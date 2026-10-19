@@ -1038,7 +1038,7 @@ class _SpeedIpInfo extends StatelessWidget {
     final colors = context.shuyoColors;
     final flag = _flagFor(countryCode);
     final details = [
-      if (flag != null) flag,
+      ?flag,
       if (isp != null && isp!.trim().isNotEmpty) isp!.trim(),
     ].join(' ');
     final specialAddress = details.isEmpty
