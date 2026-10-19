@@ -58,6 +58,7 @@ class SettingsStore extends ChangeNotifier {
   static const String _kLoginDomain = 'settings.loginDomain';
   static const String _kLogEnabled = 'settings.logEnabled';
   static const String _kLogLevel = 'settings.logLevel';
+  static const String _kSpeedtestPreferIpv6 = 'settings.speedtestPreferIpv6';
 
   /// 「新用户引导走完了没有」。
   ///
@@ -333,6 +334,14 @@ class SettingsStore extends ChangeNotifier {
     }
     notifyListeners();
   }
+
+  // ------------------------------------------------------------- speedtest
+
+  /// 测速线路优先使用 IPv6；不可达时页面会尝试 IPv4。
+  bool get speedtestPreferIpv6 => _prefs.getBool(_kSpeedtestPreferIpv6) ?? true;
+
+  set speedtestPreferIpv6(bool value) =>
+      _writeBool(_kSpeedtestPreferIpv6, value);
 
   // ------------------------------------------------------------- internals
 

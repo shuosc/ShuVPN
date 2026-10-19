@@ -1,18 +1,30 @@
 // 测速页的离线渲染测试。
 //
 // 真实现要打十几秒网络，这里换成按脚本回调的替身：验证按钮在三个状态下的
-// 文案、读数落在哪个位置、完成之后回到待测、以及失败时那句校园网提示。
+// 文案、读数落在哪个位置、完成之后回到待测、以及失败时的网络提示。
 
 import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shuvpn/app/theme.dart';
+import 'package:shuvpn/core/settings/settings_store.dart';
 import 'package:shuvpn/core/speedtest/shu_speedtest.dart';
 import 'package:shuvpn/core/speedtest/shu_speedtest_service.dart';
 import 'package:shuvpn/features/services/speedtest_page.dart';
 
 class _ScriptedRunner implements ShuSpeedTestRunner {
+  _ScriptedRunner({
+    this.clientIp = '240e:46c:6910:472:9cc8:e4ff:fecd:17dc',
+    this.clientIsp = 'China Telecom (Group)',
+    this.clientCountryCode = 'CN',
+  });
+
+  final String clientIp;
+  final String? clientIsp;
+  final String? clientCountryCode;
   final Completer<void> _gate = Completer<void>();
 
   /// 页面不该在测量中调它；测试拿它验证按钮已锁住。
@@ -72,7 +84,9 @@ class _ScriptedRunner implements ShuSpeedTestRunner {
       downloadMbps: 88.5,
       uploadMbps: 31.2,
       elapsed: const Duration(seconds: 1),
-      clientIp: '10.10.1.23',
+      clientIp: clientIp,
+      clientIsp: clientIsp,
+      clientCountryCode: clientCountryCode,
     );
   }
 }
@@ -157,10 +171,14 @@ Future<void> _pumpPage(
   tester.view.physicalSize = physical;
   tester.view.devicePixelRatio = 2;
   addTearDown(tester.view.reset);
+  final settings = await SettingsStore.load();
   await tester.pumpWidget(
-    MaterialApp(
-      theme: buildShuTheme(Brightness.light),
-      home: SpeedTestPage(runner: runner),
+    ChangeNotifierProvider<SettingsStore>.value(
+      value: settings,
+      child: MaterialApp(
+        theme: buildShuTheme(Brightness.light),
+        home: SpeedTestPage(runner: runner),
+      ),
     ),
   );
 }
@@ -179,7 +197,10 @@ double _barProgress(WidgetTester tester) => tester
 
 void main() {
   // 上一轮结果记在进程内的历史里，测试之间必须互相清干净。
-  setUp(ShuSpeedTestHistory.reset);
+  setUp(() {
+    ShuSpeedTestHistory.reset();
+    SharedPreferences.setMockInitialValues({});
+  });
 
   testWidgets('一轮测速：测量中锁住按钮，完成后回到待测但留着四个读数', (tester) async {
     final runner = _ScriptedRunner();
@@ -187,7 +208,7 @@ void main() {
 
     expect(find.text('开始测速'), findsOneWidget);
     expect(find.text('0.00'), findsWidgets, reason: '待测时读数区是 0.00');
-    expect(find.text('测速支持：上海大学校内测速站 speedtest.shu.edu.cn'), findsOneWidget);
+    expect(find.text('测速支持：上海大学测速站 speedtest.cc.shu.edu.cn'), findsOneWidget);
 
     await tester.tap(find.text('开始测速'));
     await tester.pump();
@@ -227,9 +248,40 @@ void main() {
     expect(find.text('18.5 ms'), findsOneWidget);
     expect(find.text('22.0 ms'), findsOneWidget);
     expect(find.text('抖动 1.50 ms'), findsOneWidget);
+    const ipLine = 'IPV6  240e:46c:6910:472:9cc8:e4ff:fecd:17dc';
+    expect(find.text(ipLine), findsOneWidget);
+    expect(find.text('🇨🇳 China Telecom (Group)'), findsOneWidget);
+    final ipTop = tester.getTopLeft(find.text(ipLine)).dy;
+    expect(ipTop, greaterThan(tester.getTopLeft(find.text('PING')).dy));
+    expect(ipTop, lessThan(tester.getTopLeft(find.text('下载')).dy));
 
-    // 页脚只有一行固定文案，不附带走线或本机地址。
+    // 页脚只报测速站，不附带走线或本机地址。
     expect(find.textContaining('本机'), findsNothing);
+  });
+
+  testWidgets('连接偏好默认 IPv6，可从顶栏切换到 IPv4', (tester) async {
+    await _pumpPage(tester, _ScriptedRunner());
+
+    await tester.tap(find.byTooltip('连接偏好'));
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<CheckedPopupMenuItem<bool>>(
+            find.widgetWithText(CheckedPopupMenuItem<bool>, '优先 IPv6'),
+          )
+          .checked,
+      isTrue,
+    );
+
+    await tester.tap(find.text('优先 IPv4'));
+    await tester.pumpAndSettle();
+    expect(find.text('测速支持：上海大学测速站 speedtest.cc.shu.edu.cn'), findsOneWidget);
+    expect(ShuSpeedTestServer.shu.baseUri.host, 'speedtest.cc.shu.edu.cn');
+    expect(ShuSpeedTestServer.shuIpv6.baseUri.host, 'speedtest6.cc.shu.edu.cn');
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await _pumpPage(tester, _ScriptedRunner());
+    expect(find.text('测速支持：上海大学测速站 speedtest.cc.shu.edu.cn'), findsOneWidget);
   });
 
   testWidgets('时延阶段表盘与读数区都不显示数值', (tester) async {
@@ -283,7 +335,11 @@ void main() {
   });
 
   testWidgets('离开页面再进来仍显示上一轮结果', (tester) async {
-    final runner = _ScriptedRunner();
+    final runner = _ScriptedRunner(
+      clientIp: 'fd12:3456::1',
+      clientIsp: null,
+      clientCountryCode: null,
+    );
     await _pumpPage(tester, runner);
     await tester.tap(find.text('开始测速'));
     await tester.pump();
@@ -301,10 +357,12 @@ void main() {
     expect(find.text('88.50'), findsOneWidget);
     expect(find.text('31.20'), findsOneWidget);
     expect(find.text('12.0 ms'), findsOneWidget);
+    expect(find.text('IPV6  fd12:3456::1'), findsOneWidget);
+    expect(find.text('🏷️ RFC 4193 · 唯一本地地址'), findsOneWidget);
     expect(_gaugeTarget(tester), 0);
   });
 
-  testWidgets('连不上时给出校园网提示与重试', (tester) async {
+  testWidgets('连不上时给出网络提示与重试', (tester) async {
     await _pumpPage(tester, _UnreachableRunner());
 
     await tester.tap(find.text('开始测速'));
@@ -313,7 +371,7 @@ void main() {
     // 读数区只剩一个破折号，不写「测速失败」这类状态字。
     expect(find.text('—'), findsOneWidget);
     expect(find.text('无法连接测速服务器'), findsOneWidget);
-    expect(find.textContaining('校园网内可达'), findsOneWidget);
+    expect(find.text('请检查网络连接后重试。'), findsOneWidget);
     expect(find.text('重试'), findsOneWidget);
   });
 

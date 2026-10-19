@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -7,6 +8,7 @@ import '../../app/shuyo_text_styles.dart';
 import '../../app/theme.dart';
 import '../../core/connection/connection_controller.dart';
 import '../../core/logging/shu_log.dart';
+import '../../core/settings/settings_store.dart';
 import '../../core/speedtest/shu_speedtest.dart';
 import '../../core/speedtest/shu_speedtest_service.dart';
 import '../../widgets/shu_app_bar.dart';
@@ -27,7 +29,8 @@ const double _readoutLift = 22;
 ///
 /// 这一页只回答一个问题：现在这条网络有多快。屏幕上从上到下是：一颗表盘、
 /// 一行读数（数字 + 单位）、一行延迟与抖动（`PING` 后面是空闲 / 下载 /
-/// 上传三个值，后两个用上下箭头标识）、两个大数（下行 / 上行）。按钮
+/// 上传三个值，后两个用上下箭头标识）、两行客户端 IP（地址族与地址 / 国旗与运营商）、
+/// 两个大数（下行 / 上行）。按钮
 /// 只有一个，跑起来之后锁住 —— 一轮测速是有始有终的，中途那个数不构成
 /// 结果。
 ///
@@ -44,8 +47,8 @@ const double _readoutLift = 22;
 ///
 /// 测完不留「测速完成」这种状态：读数回到 `0.00 Mbps`、表盘归 0、按钮回到
 /// 「开始测速」，这一页看起来和刚进来一样。唯一留下的是时延、抖动、下载、
-/// 上传四个数 —— 那是用户这一轮真正要看的东西。页面被路由销毁也不丢，
-/// 记在 [ShuSpeedTestHistory]。
+/// 上传四个数和客户端 IP —— 那是用户这一轮真正要看的东西。页面被路由销毁
+/// 也不丢，记在 [ShuSpeedTestHistory]。
 ///
 /// ## 与三个数据面无关
 ///
@@ -73,11 +76,16 @@ class _SpeedTestPageState extends State<SpeedTestPage> {
   ShuSpeedTestReport? _report;
   String? _error;
   bool _running = false;
+  late bool _preferIpv6;
+
+  ShuSpeedTestServer get _preferredServer =>
+      _preferIpv6 ? ShuSpeedTestServer.shuIpv6 : ShuSpeedTestServer.shu;
 
   @override
   void initState() {
     super.initState();
     _report = ShuSpeedTestHistory.last;
+    _preferIpv6 = context.read<SettingsStore>().speedtestPreferIpv6;
   }
 
   @override
@@ -97,6 +105,33 @@ class _SpeedTestPageState extends State<SpeedTestPage> {
       appBar: ShuAppBar(
         title: '网络测速',
         onBack: () => Navigator.of(context).pop(),
+        actions: [
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: PopupMenuButton<bool>(
+              tooltip: '连接偏好',
+              enabled: !_running,
+              position: PopupMenuPosition.under,
+              icon: const Icon(Icons.more_vert),
+              onSelected: (preferIpv6) {
+                context.read<SettingsStore>().speedtestPreferIpv6 = preferIpv6;
+                setState(() => _preferIpv6 = preferIpv6);
+              },
+              itemBuilder: (context) => [
+                CheckedPopupMenuItem<bool>(
+                  value: true,
+                  checked: _preferIpv6,
+                  child: const Text('优先 IPv6'),
+                ),
+                CheckedPopupMenuItem<bool>(
+                  value: false,
+                  checked: !_preferIpv6,
+                  child: const Text('优先 IPv4'),
+                ),
+              ],
+            ),
+          ),
+        ],
         bottomHeight: _progressBarHeight,
         bottom: _SpeedProgressBar(
           // 失败时进度停在中途那个数上没有意义，直接收掉。
@@ -207,6 +242,13 @@ class _SpeedTestPageState extends State<SpeedTestPage> {
                           ],
                         ),
                       ),
+                      const SizedBox(height: 12),
+                      _SpeedIpInfo(
+                        version: _clientIpVersion,
+                        address: _clientIp ?? '--',
+                        isp: _clientIsp,
+                        countryCode: _clientCountryCode,
+                      ),
                       const SizedBox(height: 20),
                       ShuCard(
                         padding: const EdgeInsets.symmetric(vertical: 16),
@@ -264,7 +306,7 @@ class _SpeedTestPageState extends State<SpeedTestPage> {
                       ),
                       const SizedBox(height: 14),
                       Text(
-                        '测速支持：上海大学校内测速站 speedtest.shu.edu.cn',
+                        '测速支持：上海大学测速站 speedtest.cc.shu.edu.cn',
                         textAlign: TextAlign.center,
                         style: ShuYoTextStyles.meta(color: colors.textMuted),
                       ),
@@ -286,7 +328,9 @@ class _SpeedTestPageState extends State<SpeedTestPage> {
     final dialer = injected == null
         ? context.read<ConnectionController>().tunnelDialer
         : null;
-    final runner = injected ?? ShuSpeedTestService(dialer: dialer);
+    final runner =
+        injected ??
+        ShuSpeedTestService(server: _preferredServer, dialer: dialer);
 
     setState(() {
       _runner = runner;
@@ -296,13 +340,37 @@ class _SpeedTestPageState extends State<SpeedTestPage> {
       _progress = const ShuSpeedTestProgress(phase: ShuSpeedTestPhase.ping);
     });
 
+    void onUpdate(ShuSpeedTestProgress progress) {
+      if (!mounted) return;
+      setState(() => _progress = progress);
+    }
+
     try {
-      final report = await runner.run(
-        onUpdate: (progress) {
-          if (!mounted) return;
-          setState(() => _progress = progress);
-        },
-      );
+      ShuSpeedTestReport report;
+      try {
+        report = await runner.run(onUpdate: onUpdate);
+      } on ShuSpeedTestException catch (error) {
+        final initialConnectionFailed =
+            _progress.phase == ShuSpeedTestPhase.ping &&
+            _progress.progress == 0;
+        if (injected != null ||
+            !_preferIpv6 ||
+            !initialConnectionFailed ||
+            (error.kind != ShuSpeedTestFailure.unreachable &&
+                error.kind != ShuSpeedTestFailure.timeout)) {
+          rethrow;
+        }
+        if (!mounted) return;
+        final fallback = ShuSpeedTestService(
+          server: ShuSpeedTestServer.shu,
+          dialer: dialer,
+        );
+        setState(() {
+          _runner = fallback;
+          _progress = const ShuSpeedTestProgress(phase: ShuSpeedTestPhase.ping);
+        });
+        report = await fallback.run(onUpdate: onUpdate);
+      }
       if (!mounted) return;
       ShuSpeedTestHistory.record(report);
       setState(() {
@@ -367,12 +435,11 @@ class _SpeedTestPageState extends State<SpeedTestPage> {
 
   /// 连不上与超时对用户是同一件事：此刻到不了测速站。
   ///
-  /// 站点解析到 `10.10.0.115`，只在校内网开放；这句话把「为什么」和
-  /// 「怎么办」一次说完，比只显示 `SocketException` 有用。
+  /// 新站支持公网访问；连不上时提示用户检查当前网络。
   static String? _hintFor(ShuSpeedTestException error) {
     return switch (error.kind) {
       ShuSpeedTestFailure.unreachable ||
-      ShuSpeedTestFailure.timeout => '测速站只在校园网内可达。连接校园网或打开 ShuVPN 后重试。',
+      ShuSpeedTestFailure.timeout => '请检查网络连接后重试。',
       _ => null,
     };
   }
@@ -385,6 +452,19 @@ class _SpeedTestPageState extends State<SpeedTestPage> {
       _report?.uploadLatencyMs ?? _progress.uploadLatencyMs;
   double? get _downloadMbps => _report?.downloadMbps ?? _progress.downloadMbps;
   double? get _uploadMbps => _report?.uploadMbps ?? _progress.uploadMbps;
+  String? get _clientIp => _report?.clientIp ?? _progress.clientIp;
+  String? get _clientIsp => _report?.clientIsp ?? _progress.clientIsp;
+  String? get _clientCountryCode =>
+      _report?.clientCountryCode ?? _progress.clientCountryCode;
+
+  String get _clientIpVersion {
+    final address = _clientIp?.trim();
+    if (address == null || address.isEmpty) return 'IP';
+    final ip = address.split(RegExp(r'[\s(]')).first;
+    if (ip.contains(':')) return 'IPV6';
+    if (ip.contains('.')) return 'IPV4';
+    return 'IP';
+  }
 
   /// 两格大数的文本。
   ///
@@ -937,5 +1017,135 @@ class _SpeedStat extends StatelessWidget {
         ),
       ],
     );
+  }
+}
+
+class _SpeedIpInfo extends StatelessWidget {
+  const _SpeedIpInfo({
+    required this.version,
+    required this.address,
+    required this.isp,
+    required this.countryCode,
+  });
+
+  final String version;
+  final String address;
+  final String? isp;
+  final String? countryCode;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.shuyoColors;
+    final flag = _flagFor(countryCode);
+    final details = [
+      if (flag != null) flag,
+      if (isp != null && isp!.trim().isNotEmpty) isp!.trim(),
+    ].join(' ');
+    final specialAddress = details.isEmpty
+        ? _specialAddressLabel(address)
+        : null;
+    final firstLine = '$version  $address';
+    return Column(
+      children: [
+        LayoutBuilder(
+          builder: (context, constraints) => SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(minWidth: constraints.maxWidth),
+              child: Text(
+                firstLine,
+                maxLines: 1,
+                softWrap: false,
+                textAlign: TextAlign.center,
+                textDirection: TextDirection.ltr,
+                style: ShuYoTextStyles.label(
+                  color: colors.textSecondary,
+                  size: 12,
+                ),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          details.isNotEmpty ? details : specialAddress ?? '--',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          textAlign: TextAlign.center,
+          style: ShuYoTextStyles.meta(color: colors.textTertiary),
+        ),
+      ],
+    );
+  }
+
+  static String? _flagFor(String? countryCode) {
+    final code = countryCode?.toUpperCase();
+    if (code == null || !RegExp(r'^[A-Z]{2}$').hasMatch(code)) return null;
+    return String.fromCharCodes(
+      code.codeUnits.map((letter) => 0x1F1E6 + letter - 65),
+    );
+  }
+
+  /// 仅在测速站未提供地理和运营商信息时，标出已知的特殊用途地址。
+  static String? _specialAddressLabel(String value) {
+    final address = InternetAddress.tryParse(value);
+    if (address == null) return null;
+    final bytes = address.rawAddress;
+
+    bool inPrefix(List<int> prefix, int length) {
+      for (var index = 0; index < length ~/ 8; index++) {
+        if (bytes[index] != prefix[index]) return false;
+      }
+      final remaining = length % 8;
+      if (remaining == 0) return true;
+      final mask = (0xff << (8 - remaining)) & 0xff;
+      return (bytes[length ~/ 8] & mask) == (prefix[length ~/ 8] & mask);
+    }
+
+    String label(String rfc, String description) =>
+        '🏷️ RFC $rfc · $description';
+
+    if (address.type == InternetAddressType.IPv4) {
+      if (inPrefix([0, 0, 0, 0], 32)) return label('1122', '未指定地址');
+      if (inPrefix([0, 0, 0, 0], 8)) return label('791', '本网络地址');
+      if (inPrefix([10, 0, 0, 0], 8) ||
+          inPrefix([172, 16, 0, 0], 12) ||
+          inPrefix([192, 168, 0, 0], 16)) {
+        return label('1918', '私有网络地址');
+      }
+      if (inPrefix([100, 64, 0, 0], 10)) {
+        return label('6598', '运营商共享地址');
+      }
+      if (inPrefix([127, 0, 0, 0], 8)) return label('1122', '环回地址');
+      if (inPrefix([169, 254, 0, 0], 16)) {
+        return label('3927', '链路本地地址');
+      }
+      if (inPrefix([192, 0, 2, 0], 24) ||
+          inPrefix([198, 51, 100, 0], 24) ||
+          inPrefix([203, 0, 113, 0], 24)) {
+        return label('5737', '文档示例地址');
+      }
+      if (inPrefix([198, 18, 0, 0], 15)) {
+        return label('2544', '性能测试地址');
+      }
+    } else {
+      if (inPrefix(List.filled(16, 0), 128)) {
+        return label('4291', '未指定地址');
+      }
+      if (inPrefix([...List.filled(15, 0), 1], 128)) {
+        return label('4291', '环回地址');
+      }
+      if (inPrefix([0xfc], 7)) return label('4193', '唯一本地地址');
+      if (inPrefix([0xfe, 0x80], 10)) {
+        return label('4291', '链路本地地址');
+      }
+      if (inPrefix([0x20, 0x01, 0x0d, 0xb8], 32)) {
+        return label('3849', '文档示例地址');
+      }
+      if (inPrefix([0x3f, 0xff, 0x00], 20)) {
+        return label('9637', '文档示例地址');
+      }
+    }
+    return null;
   }
 }

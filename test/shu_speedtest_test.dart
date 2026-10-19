@@ -99,8 +99,12 @@ void main() {
     expect(report.pingMs, greaterThanOrEqualTo(0));
     expect(report.downloadMbps, greaterThan(0));
     expect(report.uploadMbps, greaterThan(0));
-    // getIP.php 与测速并行，取到之后带在结果里。
+    // getIP.php 的 gzip 响应要解压，并分别保留 IP、运营商和国家代码。
     expect(report.clientIp, '127.0.0.1');
+    expect(report.clientIsp, 'China Telecom (Group)');
+    expect(report.clientCountryCode, 'CN');
+    expect(updates.last.clientIsp, 'China Telecom (Group)');
+    expect(updates.last.clientCountryCode, 'CN');
     expect(
       phases,
       containsAllInOrder(<ShuSpeedTestPhase>[
@@ -115,7 +119,7 @@ void main() {
       hasLength(1),
     );
 
-    // 每个阶段收尾时都发过一次「瞬时归零」，而那一格已经填上了均值。
+    // 收尾时仪表盘沿用最后的过程读数；统计结果只填入下方结果格。
     final downloadSettle = updates.firstWhere(
       (update) =>
           update.phase == ShuSpeedTestPhase.download &&
@@ -128,7 +132,13 @@ void main() {
           update.phase == ShuSpeedTestPhase.download &&
           update.downloadMbps == null,
     );
-    expect(report.downloadMbps, closeTo(downloadLastSample.speedMbps, 1e-9));
+    final downloadHold = updates.firstWhere(
+      (update) =>
+          update.phase == ShuSpeedTestPhase.download &&
+          update.downloadMbps != null &&
+          update.speedMbps > 0,
+    );
+    expect(downloadHold.speedMbps, downloadLastSample.speedMbps);
     final uploadSettle = updates.firstWhere(
       (update) =>
           update.phase == ShuSpeedTestPhase.upload &&
@@ -140,7 +150,14 @@ void main() {
       (update) =>
           update.phase == ShuSpeedTestPhase.upload && update.uploadMbps == null,
     );
-    expect(report.uploadMbps, closeTo(uploadLastSample.speedMbps, 1e-9));
+    final uploadHold = updates.firstWhere(
+      (update) =>
+          update.phase == ShuSpeedTestPhase.upload &&
+          update.uploadMbps != null &&
+          update.speedMbps > 0,
+    );
+    expect(uploadHold.speedMbps, uploadLastSample.speedMbps);
+    expect(updates.last.speedMbps, 0);
   });
 
   test('给了隧道拨号器时，请求经临时回环代理走拨号器', () async {
@@ -517,7 +534,13 @@ Future<void> _handle(HttpRequest request) async {
     case '/backend/getIP.php':
       request.response
         ..headers.contentType = ContentType.json
-        ..write('{"processedString":"127.0.0.1","rawIspInfo":""}');
+        ..headers.set(HttpHeaders.contentEncodingHeader, 'gzip')
+        ..add(
+          gzip.encode(
+            '{"processedString":"127.0.0.1 - China Telecom (Group), CN","rawIspInfo":{"org":"AS4134 China Telecom (Group)","country":"CN"}}'
+                .codeUnits,
+          ),
+        );
       await request.response.close();
       return;
     default:

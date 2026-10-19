@@ -24,9 +24,8 @@ enum ShuSpeedTestPhase {
 
 /// 测速失败的类型。
 ///
-/// 界面据此决定要不要补一句「为什么」：连不上与超时是同一种用户处境
-/// （站点只在校内可达），而服务端返回 404 是站点本身的问题，不该把责任
-/// 推给用户的网络。
+/// 界面据此决定要不要补一句「为什么」：连不上与超时是同一种用户处境，
+/// 而服务端返回 404 是站点本身的问题，不该把责任推给用户的网络。
 enum ShuSpeedTestFailure {
   /// TCP / TLS 都没建起来。
   unreachable,
@@ -63,7 +62,7 @@ class ShuSpeedTestException implements Exception {
 
 /// 一个 LibreSpeed 站点的入口。
 ///
-/// 上海大学测速站跑的是 LibreSpeed 5.2.4，四个端点固定：
+/// 上海大学测速站跑的是 LibreSpeed 5.2.5，四个端点固定：
 ///
 /// | 用途 | 路径 |
 /// | :--- | :--- |
@@ -85,7 +84,7 @@ class ShuSpeedTestServer {
     this.clientIpPath = 'backend/getIP.php',
   });
 
-  /// 显示在页面底部的名字。
+  /// 站点名称，用于测速日志和结果。
   final String name;
 
   final Uri baseUri;
@@ -95,16 +94,16 @@ class ShuSpeedTestServer {
   final String pingPath;
   final String clientIpPath;
 
-  /// 上海大学 IPv4 线路。校内解析到 `10.10.0.115`，校外不可达。
+  /// 上海大学 IPv4 线路。新入口支持从公网访问。
   static final ShuSpeedTestServer shu = ShuSpeedTestServer(
     name: '上海大学测速站',
-    baseUri: Uri.parse('https://speedtest.shu.edu.cn/'),
+    baseUri: Uri.parse('https://speedtest.cc.shu.edu.cn/'),
   );
 
   /// 上海大学 IPv6 线路。与 [shu] 是同一套后端，只是另一条入口。
   static final ShuSpeedTestServer shuIpv6 = ShuSpeedTestServer(
     name: '上海大学测速站 · IPv6',
-    baseUri: Uri.parse('https://speedtest6.shu.edu.cn/'),
+    baseUri: Uri.parse('https://speedtest6.cc.shu.edu.cn/'),
   );
 
   Uri get downloadUri => baseUri.resolve(downloadPath);
@@ -115,7 +114,7 @@ class ShuSpeedTestServer {
 
 /// 一轮测速的强度。
 ///
-/// 基线是上海大学测速站用的 `speedtest_worker.js`（LibreSpeed 5.2.4）里的
+/// 基线是上海大学测速站用的 `speedtest_worker.js`（LibreSpeed 5.2.5）里的
 /// `settings`：每次下载 100 MiB、1.5 秒 / 3 秒宽限、1.06 的链路开销补偿、
 /// 300 毫秒的流启动间隔，以及 `test_order` 里 IP 之后的 1 秒等待。
 ///
@@ -203,8 +202,8 @@ class ShuSpeedTestTuning {
   /// 采样间隔。
   ///
   /// 站点是 200 毫秒；这里取 50 毫秒（一秒 20 次），数字跳得几乎看不清
-  /// 末两位 —— 这正是测速时该有的手感。采样只决定**多久算一次**，速度
-  /// 始终是「累计字节 ÷ 累计时间」，所以频率不影响读数，只影响刷新频率。
+  /// 末两位 —— 这正是测速时该有的手感。表盘仍用「累计字节 ÷ 累计时间」
+  /// 刷新；阶段结果另取连续 1 秒吞吐率的按时间加权中位数。
   final Duration sampleInterval;
 
   /// 各条流启动之间的间隔，对应 `xhr_multistreamDelay`。
@@ -232,10 +231,10 @@ class ShuSpeedTestTuning {
   /// 建立 TCP 连接的上限。
   final Duration startupTimeout;
 
-  /// 一个阶段结束后，读数先在均值上停一拍。
+  /// 一个阶段结束后，仪表盘先在最后的过程读数上停一拍。
   ///
   /// 测速跑到最后一帧时数字还在跳，立刻切到下一阶段等于把结果从眼前抹掉。
-  /// 停这一下让人看清「这一轮跑到多少」，同时下面那一格填上均值。
+  /// 停这一下让人看清「这一轮跑到多少」，同时下面那一格填上统计结果。
   final Duration phaseHold;
 
   /// 停完之后表盘回落、数字归零所用的时间。
@@ -268,11 +267,14 @@ class ShuSpeedTestProgress {
     this.downloadMbps,
     this.uploadMbps,
     this.clientIp,
+    this.clientIsp,
+    this.clientCountryCode,
   });
 
   final ShuSpeedTestPhase phase;
 
-  /// 当前阶段从宽限结束至今的平均速度。`ping` 阶段为 0。
+  /// 仪表盘用的过程读数：当前阶段从宽限结束至今的累计速度。
+  /// `ping` 阶段为 0；最终记录的中位数不写入这里。
   final double speedMbps;
 
   /// 当前阶段的完成度，0..1。
@@ -290,12 +292,16 @@ class ShuSpeedTestProgress {
   final double? downloadLatencyMs;
   final double? uploadLatencyMs;
 
-  /// 已经量到的下行 / 上行。测完之前是「到目前为止」的读数。
+  /// 阶段结束后的下行 / 上行统计结果；测完之前为 null。
   final double? downloadMbps;
   final double? uploadMbps;
 
   /// 服务端看到的客户端地址。取不到时为 null。
   final String? clientIp;
+
+  /// 服务端识别的运营商和 ISO 3166-1 双字母国家代码。识别不到时为 null。
+  final String? clientIsp;
+  final String? clientCountryCode;
 }
 
 /// 一轮测速的最终结果。
@@ -311,6 +317,8 @@ class ShuSpeedTestReport {
     this.downloadLatencyMs,
     this.uploadLatencyMs,
     this.clientIp,
+    this.clientIsp,
+    this.clientCountryCode,
   });
 
   final ShuSpeedTestServer server;
@@ -328,6 +336,8 @@ class ShuSpeedTestReport {
   final double? uploadLatencyMs;
 
   final String? clientIp;
+  final String? clientIsp;
+  final String? clientCountryCode;
 }
 
 /// 最近一次完成的测速结果。

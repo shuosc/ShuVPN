@@ -15,7 +15,7 @@ import 'shu_speedtest.dart';
 /// 抽成接口只为让页面测试塞替身：真实现每次都要打十秒钟网络，而 widget
 /// 测试只关心读数怎么画。
 abstract interface class ShuSpeedTestRunner {
-  /// 这一轮打的是谁。页面底部显示它的名字。
+  /// 这一轮使用的测速站点。
   ShuSpeedTestServer get server;
 
   /// 跑完一整轮。中途被 [cancel] 时抛
@@ -49,8 +49,7 @@ abstract interface class ShuSpeedTestRunner {
 /// 自环，见 `ShuVpnService.kt`），进程里的普通 socket 因此走的是底层链路。
 /// 要测隧道，就必须经过 [SangforTcpDialer]。
 ///
-/// 直连那一档是给「校园网内、还没连 VPN」准备的：站点解析到
-/// `10.10.0.115`，在校内本来就能到。
+/// 直连那一档适用于尚未连接 VPN 的用户；新的测速站入口也支持公网访问。
 ///
 /// ## 与网页端逐项对齐
 ///
@@ -63,7 +62,8 @@ abstract interface class ShuSpeedTestRunner {
 /// - 上行：6 条流、每条请求一个 1 MiB 正文（站点写 20 MiB，但它的 nginx 只
 ///   收到 1 MiB 就回 413）、宽限 3 秒，其余同上。
 /// - 读数：`字节 / 秒 × 8 × 1.06 / 1000000`。
-/// - 收尾：每个阶段跑完先在均值上停 [ShuSpeedTestTuning.phaseHold]，再把
+/// - 记录值：10 秒内连续 1 秒吞吐窗口的按时间加权中位数；表盘仍显示过程读数。
+/// - 收尾：每个阶段跑完先在实时读数上停 [ShuSpeedTestTuning.phaseHold]，再把
 ///   瞬时值归零、留 [ShuSpeedTestTuning.phaseDrop] 让表盘回落，之后才进
 ///   下一阶段。
 /// - 时延：站点页面本身不跑 `P`；应用要显示时延与抖动，所以直接沿用
@@ -110,6 +110,8 @@ class ShuSpeedTestService implements ShuSpeedTestRunner {
   /// 「网关不认这个目标」而不是「下载接口返回 HTTP 502」。
   Object? _dialFailure;
 
+  ({String ip, String? isp, String? countryCode})? _clientInfo;
+
   bool _running = false;
   bool _cancelled = false;
 
@@ -133,6 +135,7 @@ class ShuSpeedTestService implements ShuSpeedTestRunner {
     _cancelled = false;
     _findProxy = null;
     _dialFailure = null;
+    _clientInfo = null;
     ShuHttpProxy? bridge;
     final watch = Stopwatch()..start();
 
@@ -155,22 +158,28 @@ class ShuSpeedTestService implements ShuSpeedTestRunner {
       }
 
       ShuLog.i(ShuLogTag.speedtest, '开始 · ${server.name}');
-      // 站点的 test_order 是 IP_D_U：先取地址，再等 1 秒。地址同时是页脚
-      // 那一行小字，取不到也继续测。
-      final address = await _fetchClientIp();
+      // 站点的 test_order 是 IP_D_U：先取地址，再等 1 秒。地址显示在延迟下方，
+      // 取不到也继续测。
+      _clientInfo = await _fetchClientInfo();
+      final address = _clientInfo?.ip;
       _throwIfCancelled();
       await _pause(tuning.initialDelay);
       _throwIfCancelled();
 
       onUpdate(
-        ShuSpeedTestProgress(phase: ShuSpeedTestPhase.ping, clientIp: address),
+        ShuSpeedTestProgress(
+          phase: ShuSpeedTestPhase.ping,
+          clientIp: address,
+          clientIsp: _clientInfo?.isp,
+          clientCountryCode: _clientInfo?.countryCode,
+        ),
       );
       final ping = await _measurePing(onUpdate, address);
 
-      // 一个阶段跑完时的收尾：先在均值上停一拍，再让表盘回落。
+      // 一个阶段跑完时的收尾：表盘先停在最后的过程读数，再回落。
       //
-      // 只发两次进度就够 —— 第一次把均值填进下面那一格、读数停在最后一帧；
-      // 第二次把瞬时速度置 0，指针与数字自己走回去（页面那侧的补间负责
+      // 第一次把统计结果填进下面那一格，但表盘仍停在最后的过程读数；
+      // 第二次把表盘速度置 0，指针与数字自己走回去（页面那侧的补间负责
       // 下落动画）。两次之间都断在 `_pause` 上，取消能立刻打断。
       Future<void> settlePhase({
         required ShuSpeedTestPhase phase,
@@ -191,6 +200,8 @@ class ShuSpeedTestService implements ShuSpeedTestRunner {
           downloadMbps: downloadMbps,
           uploadMbps: uploadMbps,
           clientIp: address,
+          clientIsp: _clientInfo?.isp,
+          clientCountryCode: _clientInfo?.countryCode,
         );
 
         onUpdate(snapshot(live));
@@ -207,7 +218,7 @@ class ShuSpeedTestService implements ShuSpeedTestRunner {
       );
       await settlePhase(
         phase: ShuSpeedTestPhase.download,
-        live: download.mbps,
+        live: download.liveMbps,
         downloadMbps: download.mbps,
         uploadMbps: null,
         downloadLatencyMs: download.latencyMs,
@@ -223,7 +234,7 @@ class ShuSpeedTestService implements ShuSpeedTestRunner {
       );
       await settlePhase(
         phase: ShuSpeedTestPhase.upload,
-        live: upload.mbps,
+        live: upload.liveMbps,
         downloadMbps: download.mbps,
         uploadMbps: upload.mbps,
         downloadLatencyMs: download.latencyMs,
@@ -241,11 +252,13 @@ class ShuSpeedTestService implements ShuSpeedTestRunner {
         uploadLatencyMs: upload.latencyMs,
         elapsed: watch.elapsed,
         clientIp: address,
+        clientIsp: _clientInfo?.isp,
+        clientCountryCode: _clientInfo?.countryCode,
       );
       onUpdate(
         ShuSpeedTestProgress(
           phase: ShuSpeedTestPhase.done,
-          speedMbps: download.mbps,
+          speedMbps: 0,
           progress: 1,
           pingMs: report.pingMs,
           jitterMs: report.jitterMs,
@@ -254,6 +267,8 @@ class ShuSpeedTestService implements ShuSpeedTestRunner {
           downloadMbps: report.downloadMbps,
           uploadMbps: report.uploadMbps,
           clientIp: address,
+          clientIsp: report.clientIsp,
+          clientCountryCode: report.clientCountryCode,
         ),
       );
       ShuLog.i(
@@ -298,6 +313,7 @@ class ShuSpeedTestService implements ShuSpeedTestRunner {
     } finally {
       _running = false;
       _findProxy = null;
+      _clientInfo = null;
       final client = _client;
       _client = null;
       client?.close(force: true);
@@ -378,6 +394,8 @@ class ShuSpeedTestService implements ShuSpeedTestRunner {
             pingMs: measured == 0 ? null : ping,
             jitterMs: measured == 0 ? null : jitter,
             clientIp: clientIp,
+            clientIsp: _clientInfo?.isp,
+            clientCountryCode: _clientInfo?.countryCode,
           ),
         );
       }
@@ -390,7 +408,7 @@ class ShuSpeedTestService implements ShuSpeedTestRunner {
   // ------------------------------------------------------------------ 下行
 
   /// `dlTest` 的移植。
-  Future<({double mbps, double? latencyMs})> _measureDownload(
+  Future<({double mbps, double liveMbps, double? latencyMs})> _measureDownload(
     void Function(ShuSpeedTestProgress progress) onUpdate,
     String? clientIp,
     double pingMs,
@@ -471,6 +489,8 @@ class ShuSpeedTestService implements ShuSpeedTestRunner {
         pingMs: pingMs,
         jitterMs: jitterMs,
         clientIp: clientIp,
+        clientIsp: _clientInfo?.isp,
+        clientCountryCode: _clientInfo?.countryCode,
       ),
     );
     final streams = <Future<void>>[
@@ -484,14 +504,20 @@ class ShuSpeedTestService implements ShuSpeedTestRunner {
     var windowStartUs = 0;
     var graceDone = false;
     var bonusMs = 0.0;
+    final throughput = _ThroughputSeries(
+      windowUs: math.max(
+        1,
+        math.min(1000000, tuning.downloadDuration.inMicroseconds ~/ 2),
+      ),
+      overheadFactor: tuning.overheadFactor,
+    );
     // 顶栏那根进度条要的是「整个阶段还剩多少」，所以进度按「宽限 + 测量」
     // 算，从一开始就在走；速度仍只取宽限之后的窗口。
     final totalMs =
         tuning.downloadGrace.inMilliseconds +
         tuning.downloadDuration.inMilliseconds;
 
-    // [speed] 是表盘上到目前为止的窗口均速；「下载」那一格不在测量中更新 —— 读数
-    // 每 100 毫秒跳一次没有意义，等阶段结束用平均值填上去。
+    // [speed] 只供表盘显示过程读数；下方的结果格在阶段结束后才填入统计值。
     void report(double speed) {
       final elapsedMs = watch.elapsedMicroseconds / 1000 + bonusMs;
       onUpdate(
@@ -503,6 +529,8 @@ class ShuSpeedTestService implements ShuSpeedTestRunner {
           jitterMs: jitterMs,
           downloadLatencyMs: probe.minMs,
           clientIp: clientIp,
+          clientIsp: _clientInfo?.isp,
+          clientCountryCode: _clientInfo?.countryCode,
         ),
       );
     }
@@ -515,14 +543,11 @@ class ShuSpeedTestService implements ShuSpeedTestRunner {
 
       if (!graceDone) {
         if (tMs > tuning.downloadGrace.inMilliseconds) {
-          // 站点只在已经收到过数据时才清零重计时；一个字节都没到就
-          // 保持原起点，速度自然接近 0。
-          if (_sum(bytes) > 0) {
-            windowStartUs = nowUs;
-            bonusMs = 0;
-            for (var index = 0; index < bytes.length; index++) {
-              bytes[index] = 0;
-            }
+          // 计量窗口始终从宽限结束开始，保证记录统计的是完整的测量阶段。
+          windowStartUs = nowUs;
+          bonusMs = 0;
+          for (var index = 0; index < bytes.length; index++) {
+            bytes[index] = 0;
           }
           graceDone = true;
         }
@@ -533,13 +558,15 @@ class ShuSpeedTestService implements ShuSpeedTestRunner {
       }
       if (tMs < tuning.sampleInterval.inMilliseconds) return;
 
-      final bytesPerSecond = _sum(bytes) / (tMs / 1000);
+      final totalBytes = _sum(bytes);
+      final bytesPerSecond = totalBytes / (tMs / 1000);
       if (tuning.autoShorten) {
         // 每 200 毫秒缩短一点，单次最多 400 毫秒。
         bonusMs += math.min(5.0 * bytesPerSecond / 100000, 400.0);
       }
       // 累计响应字节 / 宽限结束后的实际秒数；1.06 仅估算链路开销。
       measured = bytesPerSecond * 8 * tuning.overheadFactor / 1000000;
+      throughput.record(nowUs - windowStartUs, totalBytes);
       report(measured);
       if (tMs + bonusMs > tuning.downloadDuration.inMilliseconds ||
           failure != null) {
@@ -563,9 +590,9 @@ class ShuSpeedTestService implements ShuSpeedTestRunner {
       );
     }
     return (
-      // 最后一拍已用当时的字节数 / 已经过的测量时间算好均速；关闭连接与
-      // 等待流退出的时间不属于测速窗口，不能在收尾后再读 Stopwatch。
-      mbps: measured,
+      // 结果取连续吞吐窗口的加权中位数；表盘仍用最后一次过程读数。
+      mbps: throughput.medianMbps!,
+      liveMbps: measured,
       latencyMs: probe.minMs,
     );
   }
@@ -573,7 +600,7 @@ class ShuSpeedTestService implements ShuSpeedTestRunner {
   // ------------------------------------------------------------------ 上行
 
   /// `ulTest` 的移植。
-  Future<({double mbps, double? latencyMs})> _measureUpload(
+  Future<({double mbps, double liveMbps, double? latencyMs})> _measureUpload(
     void Function(ShuSpeedTestProgress progress) onUpdate,
     String? clientIp,
     double pingMs,
@@ -675,6 +702,8 @@ class ShuSpeedTestService implements ShuSpeedTestRunner {
         downloadLatencyMs: downloadLatencyMs,
         downloadMbps: downloadMbps,
         clientIp: clientIp,
+        clientIsp: _clientInfo?.isp,
+        clientCountryCode: _clientInfo?.countryCode,
       ),
     );
     final streams = <Future<void>>[
@@ -685,6 +714,13 @@ class ShuSpeedTestService implements ShuSpeedTestRunner {
     var windowStartUs = 0;
     var graceDone = false;
     var bonusMs = 0.0;
+    final throughput = _ThroughputSeries(
+      windowUs: math.max(
+        1,
+        math.min(1000000, tuning.uploadDuration.inMicroseconds ~/ 2),
+      ),
+      overheadFactor: tuning.overheadFactor,
+    );
     final totalMs =
         tuning.uploadGrace.inMilliseconds +
         tuning.uploadDuration.inMilliseconds;
@@ -702,6 +738,8 @@ class ShuSpeedTestService implements ShuSpeedTestRunner {
           uploadLatencyMs: probe.minMs,
           downloadMbps: downloadMbps,
           clientIp: clientIp,
+          clientIsp: _clientInfo?.isp,
+          clientCountryCode: _clientInfo?.countryCode,
         ),
       );
     }
@@ -714,12 +752,10 @@ class ShuSpeedTestService implements ShuSpeedTestRunner {
 
       if (!graceDone) {
         if (tMs > tuning.uploadGrace.inMilliseconds) {
-          if (_sum(bytes) > 0) {
-            windowStartUs = nowUs;
-            bonusMs = 0;
-            for (var index = 0; index < bytes.length; index++) {
-              bytes[index] = 0;
-            }
+          windowStartUs = nowUs;
+          bonusMs = 0;
+          for (var index = 0; index < bytes.length; index++) {
+            bytes[index] = 0;
           }
           graceDone = true;
         }
@@ -729,12 +765,14 @@ class ShuSpeedTestService implements ShuSpeedTestRunner {
       }
       if (tMs < tuning.sampleInterval.inMilliseconds) return;
 
-      final bytesPerSecond = _sum(bytes) / (tMs / 1000);
+      final totalBytes = _sum(bytes);
+      final bytesPerSecond = totalBytes / (tMs / 1000);
       if (tuning.autoShorten) {
         bonusMs += math.min(5.0 * bytesPerSecond / 100000, 400.0);
       }
       // 上传计的是 flush 后交给内核的字节，不是服务端逐字节确认的量。
       measured = bytesPerSecond * 8 * tuning.overheadFactor / 1000000;
+      throughput.record(nowUs - windowStartUs, totalBytes);
       report(measured);
       if (tMs + bonusMs > tuning.uploadDuration.inMilliseconds ||
           failure != null) {
@@ -757,7 +795,11 @@ class ShuSpeedTestService implements ShuSpeedTestRunner {
         kind: ShuSpeedTestFailure.unreachable,
       );
     }
-    return (mbps: measured, latencyMs: probe.minMs);
+    return (
+      mbps: throughput.medianMbps!,
+      liveMbps: measured,
+      latencyMs: probe.minMs,
+    );
   }
 
   // ------------------------------------------------------------------ 公共
@@ -789,9 +831,12 @@ class ShuSpeedTestService implements ShuSpeedTestRunner {
     return client;
   }
 
-  Future<String?> _fetchClientIp() async {
+  Future<({String ip, String? isp, String? countryCode})?>
+  _fetchClientInfo() async {
     // 走 `_client`：取消时 `cancel()` 能直接掐掉这条请求。
     final client = _openClient()
+      // 测速流要按原始字节计数；IP 接口返回的 gzip JSON 则必须解压。
+      ..autoUncompress = true
       ..connectionTimeout = tuning.pingTimeout
       ..idleTimeout = const Duration(seconds: 2);
     try {
@@ -814,21 +859,89 @@ class ShuSpeedTestService implements ShuSpeedTestRunner {
         final decoded = jsonDecode(text);
         if (decoded is Map) {
           final processed = decoded['processedString'];
-          if (processed is String && processed.trim().isNotEmpty) {
-            return processed.trim();
+          if (processed is String) {
+            return _parseClientInfo(processed, decoded['rawIspInfo']);
           }
         }
         return null;
       }
       // 旧版 getIP.php 直接回一行纯文本。
       if (text.isEmpty || text.length > 80 || text.contains('<')) return null;
-      return text;
+      return _parseClientInfo(text, null);
     } on Object {
-      // 地址只是页脚的一行小字，取不到就不显示。
+      // 地址是附加信息，取不到不影响测速。
       return null;
     } finally {
       client.close(force: true);
     }
+  }
+
+  static ({String ip, String? isp, String? countryCode})? _parseClientInfo(
+    String processed,
+    Object? raw,
+  ) {
+    final ip = _extractIpAddress(processed);
+    if (ip == null) return null;
+
+    String? nonEmpty(Object? value) {
+      if (value is! String) return null;
+      final text = value.trim();
+      return text.isEmpty ? null : text;
+    }
+
+    String? isp;
+    String? countryCode;
+    if (raw is Map) {
+      final asn = raw['asn'];
+      final name =
+          nonEmpty(raw['org']) ??
+          (asn is Map ? nonEmpty(asn['name']) : null) ??
+          nonEmpty(raw['as_name']);
+      isp = name?.replaceFirst(RegExp(r'^AS\d+\s*'), '').trim();
+      if (isp?.isEmpty ?? false) isp = null;
+      final code = nonEmpty(raw['country']) ?? nonEmpty(raw['country_code']);
+      if (code != null && RegExp(r'^[A-Za-z]{2}$').hasMatch(code)) {
+        countryCode = code.toUpperCase();
+      }
+    }
+
+    // 旧站或 ISP 查询失败时 rawIspInfo 可能是空串；从展示字段取运营商。
+    final separator = processed.indexOf(' - ');
+    if (separator >= 0) {
+      var description = processed.substring(separator + 3).trim();
+      description = description.replaceFirst(
+        RegExp(r' \(<?\d+(?:\.\d+)? (?:km|mi)\)$'),
+        '',
+      );
+      final countrySuffix = RegExp(r', ([A-Za-z]{2})$').firstMatch(description);
+      if (countrySuffix != null) {
+        countryCode ??= countrySuffix.group(1)?.toUpperCase();
+        description = description.substring(0, countrySuffix.start);
+      } else if (raw is Map) {
+        final countryName = nonEmpty(raw['country_name']);
+        if (countryName != null && description.endsWith(', $countryName')) {
+          description = description.substring(
+            0,
+            description.length - countryName.length - 2,
+          );
+        }
+      }
+      if (isp == null &&
+          description.isNotEmpty &&
+          !description.toLowerCase().endsWith(' access')) {
+        isp = description;
+      }
+    }
+
+    return (ip: ip, isp: isp, countryCode: countryCode);
+  }
+
+  static String? _extractIpAddress(String value) {
+    final text = value.trim();
+    if (text.isEmpty) return null;
+    // processedString 可能在地址后附带 ISP 或线路说明，只保留 IP。
+    final first = text.split(RegExp(r'\s+')).first;
+    return InternetAddress.tryParse(first)?.address;
   }
 
   Uri _cacheBusted(Uri uri, [Map<String, String> extra = const {}]) {
@@ -921,6 +1034,54 @@ class ShuSpeedTestService implements ShuSpeedTestRunner {
 
   static String _formatLatency(double? ms) =>
       ms == null ? '--' : '${ms.toStringAsFixed(1)} ms';
+}
+
+/// 用连续吞吐窗口的加权中位数作为阶段结果。
+///
+/// 默认窗口为 1 秒，开头不足 1 秒时使用已走过的时长，沿整段测速滑动。
+/// 先从累计字节数求每个窗口的吞吐，
+/// 再按采样点实际间隔加权，避免定时器抖动让某段时间被重复算得更多。
+/// 中位数保留典型速度，同时不让一次短暂突刺或停顿主导最终结果。
+class _ThroughputSeries {
+  _ThroughputSeries({required this.windowUs, required this.overheadFactor});
+
+  final int windowUs;
+  final double overheadFactor;
+  final List<({int elapsedUs, int bytes})> _points = [(elapsedUs: 0, bytes: 0)];
+  final List<({double mbps, int weightUs})> _rates = [];
+  int _anchor = 0;
+
+  void record(int elapsedUs, int bytes) {
+    final previous = _points.last;
+    if (elapsedUs <= previous.elapsedUs) return;
+    _points.add((elapsedUs: elapsedUs, bytes: bytes));
+    final activeWindowUs = math.min(elapsedUs, windowUs);
+    final startUs = elapsedUs - activeWindowUs;
+    while (_anchor + 1 < _points.length &&
+        _points[_anchor + 1].elapsedUs <= startUs) {
+      _anchor++;
+    }
+    final left = _points[_anchor];
+    final right = _points[_anchor + 1];
+    final fraction =
+        (startUs - left.elapsedUs) / (right.elapsedUs - left.elapsedUs);
+    final bytesAtStart = left.bytes + (right.bytes - left.bytes) * fraction;
+    final windowBytes = math.max(0, bytes - bytesAtStart);
+    final mbps = windowBytes * 8 * overheadFactor / activeWindowUs;
+    _rates.add((mbps: mbps, weightUs: elapsedUs - previous.elapsedUs));
+  }
+
+  double? get medianMbps {
+    if (_rates.isEmpty) return null;
+    final sorted = [..._rates]..sort((a, b) => a.mbps.compareTo(b.mbps));
+    final totalWeight = sorted.fold<int>(0, (sum, rate) => sum + rate.weightUs);
+    var weight = 0;
+    for (final rate in sorted) {
+      weight += rate.weightUs;
+      if (weight * 2 >= totalWeight) return rate.mbps;
+    }
+    return sorted.last.mbps;
+  }
 }
 
 /// 负载下的时延探测。

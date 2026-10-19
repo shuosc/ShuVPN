@@ -45,7 +45,7 @@ class ServicesPage extends StatelessWidget {
           SettingsRow(
             icon: Icons.speed_outlined,
             title: '网络测速',
-            subtitle: '测到校内测速站的时延与上下行带宽',
+            subtitle: '测到上海大学测速站的时延与上下行带宽',
             onTap: () => context.go('/services/speedtest'),
           ),
           SettingsRow(
