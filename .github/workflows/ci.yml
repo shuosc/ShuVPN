@@ -14,7 +14,7 @@ concurrency:
 jobs:
   changes:
     name: Detect code changes
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       code: ${{ steps.changes.outputs.code }}
     steps:
@@ -63,7 +63,7 @@ jobs:
     name: Android (${{ matrix.architecture }})
     needs: changes
     if: needs.changes.outputs.code == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -146,7 +146,7 @@ jobs:
       - changes
       - android
       - windows
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Require every platform and architecture
         env:
