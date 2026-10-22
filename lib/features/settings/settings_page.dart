@@ -88,7 +88,9 @@ class SettingsPage extends StatelessWidget {
           SettingsRow(
             icon: Icons.alt_route,
             title: '网络连接',
-            subtitle: 'HTTP 与 SOCKS5 代理、Android VPN 服务',
+            subtitle: Theme.of(context).platform == TargetPlatform.android
+                ? 'HTTP 与 SOCKS5 代理、Android VPN 服务'
+                : 'HTTP 与 SOCKS5 本机代理',
             onTap: () => context.go('/settings/connection'),
           ),
           SettingsRow(

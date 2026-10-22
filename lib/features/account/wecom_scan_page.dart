@@ -20,14 +20,17 @@ import '../../core/auth/wecom_auth_service.dart';
 /// 这里直接交给账户中心 —— 后面向三个系统换取授权码要用同一个
 /// `SHU_OAUTH2` 会话。
 class WeComScanPage extends StatefulWidget {
-  const WeComScanPage({super.key});
+  const WeComScanPage({super.key, this.authService});
+
+  /// 可注入以验证扫码页的等待与窗口布局，默认使用真实服务。
+  final ShuWeComAuthService? authService;
 
   @override
   State<WeComScanPage> createState() => _WeComScanPageState();
 }
 
 class _WeComScanPageState extends State<WeComScanPage> {
-  final _service = ShuWeComAuthService();
+  late final _service = widget.authService ?? ShuWeComAuthService();
 
   ShuWeComQrSession? _session;
   ShuWeComScanStatus _status = ShuWeComScanStatus.waiting;
@@ -149,6 +152,12 @@ class _WeComScanPageState extends State<WeComScanPage> {
   @override
   Widget build(BuildContext context) {
     final colors = context.shuyoColors;
+    final desktop = switch (Theme.of(context).platform) {
+      TargetPlatform.windows ||
+      TargetPlatform.linux ||
+      TargetPlatform.macOS => true,
+      _ => false,
+    };
     return Scaffold(
       backgroundColor: colors.background,
       appBar: AppBar(
@@ -161,66 +170,78 @@ class _WeComScanPageState extends State<WeComScanPage> {
         ),
       ),
       body: SafeArea(
-        child: Padding(
+        child: SingleChildScrollView(
           padding: const EdgeInsets.all(24),
-          child: Column(
-            children: [
-              const SizedBox(height: 24),
-              Text(
-                '使用企业微信扫一扫',
-                style: ShuYoTextStyles.title(color: colors.textPrimary),
-              ),
-              const SizedBox(height: 12),
-              Text(
-                '打开手机企业微信，点击右上角扫码，或点击下方按钮直接唤起企业微信。',
-                textAlign: TextAlign.center,
-                style: ShuYoTextStyles.body(color: colors.textSecondary),
-              ),
-              const SizedBox(height: 24),
-              if (_busy)
-                const SizedBox.square(
-                  dimension: 220,
-                  child: Center(child: CircularProgressIndicator()),
-                )
-              else if (_session != null)
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(ShuRadii.tile),
-                  child: Container(
-                    width: 220,
-                    height: 220,
-                    color: Colors.white,
-                    padding: const EdgeInsets.all(8),
-                    child: Image.network(
-                      _session!.qrImageUrl,
-                      fit: BoxFit.contain,
-                      errorBuilder: (context, error, stackTrace) =>
-                          const Center(
-                            child: Icon(Icons.broken_image_outlined, size: 48),
-                          ),
-                    ),
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 480),
+              child: Column(
+                children: [
+                  const SizedBox(height: 24),
+                  Text(
+                    '使用企业微信扫一扫',
+                    style: ShuYoTextStyles.title(color: colors.textPrimary),
                   ),
-                ),
-              const SizedBox(height: 24),
-              if (_error != null)
-                Text(
-                  _error!,
-                  textAlign: TextAlign.center,
-                  style: ShuYoTextStyles.body(color: colors.danger),
-                )
-              else
-                _statusWidget(colors),
-              const SizedBox(height: 16),
-              OutlinedButton.icon(
-                onPressed: _launchingLink ? null : _openWeCom,
-                icon: const Icon(Icons.open_in_new),
-                label: const Text('打开企业微信登录'),
+                  const SizedBox(height: 12),
+                  Text(
+                    desktop
+                        ? '打开手机企业微信，扫描电脑上的二维码，并在手机上确认登录。'
+                        : '打开手机企业微信，点击右上角扫码，或点击下方按钮直接唤起企业微信。',
+                    textAlign: TextAlign.center,
+                    style: ShuYoTextStyles.body(color: colors.textSecondary),
+                  ),
+                  const SizedBox(height: 24),
+                  if (_busy)
+                    const SizedBox.square(
+                      dimension: 220,
+                      child: Center(child: CircularProgressIndicator()),
+                    )
+                  else if (_session != null)
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(ShuRadii.tile),
+                      child: Container(
+                        width: 220,
+                        height: 220,
+                        color: Colors.white,
+                        padding: const EdgeInsets.all(8),
+                        child: Image.network(
+                          _session!.qrImageUrl,
+                          fit: BoxFit.contain,
+                          errorBuilder: (context, error, stackTrace) =>
+                              const Center(
+                                child: Icon(
+                                  Icons.broken_image_outlined,
+                                  size: 48,
+                                ),
+                              ),
+                        ),
+                      ),
+                    ),
+                  const SizedBox(height: 24),
+                  if (_error != null)
+                    Text(
+                      _error!,
+                      textAlign: TextAlign.center,
+                      style: ShuYoTextStyles.body(color: colors.danger),
+                    )
+                  else
+                    _statusWidget(colors),
+                  const SizedBox(height: 16),
+                  OutlinedButton.icon(
+                    onPressed: _launchingLink || _session == null
+                        ? null
+                        : _openWeCom,
+                    icon: const Icon(Icons.open_in_new),
+                    label: Text(desktop ? '尝试打开本机企业微信' : '打开企业微信登录'),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    desktop ? '确认后，本窗口会自动继续登录' : '扫码确认后请返回本应用',
+                    style: ShuYoTextStyles.meta(color: colors.textTertiary),
+                  ),
+                ],
               ),
-              const SizedBox(height: 8),
-              Text(
-                '扫码确认后请返回本应用',
-                style: ShuYoTextStyles.meta(color: colors.textTertiary),
-              ),
-            ],
+            ),
           ),
         ),
       ),
@@ -230,7 +251,10 @@ class _WeComScanPageState extends State<WeComScanPage> {
   Widget _statusWidget(ShuYoColors colors) {
     final (text, icon) = switch (_status) {
       ShuWeComScanStatus.waiting => ('等待扫码…', Icons.schedule),
-      ShuWeComScanStatus.confirmedPending => ('已扫码，请在手机企业微信确认', Icons.android),
+      ShuWeComScanStatus.confirmedPending => (
+        '已扫码，请在手机企业微信确认',
+        Icons.phone_android,
+      ),
       ShuWeComScanStatus.succeeded => ('登录成功', Icons.check_circle),
       ShuWeComScanStatus.expired => ('二维码已过期', Icons.error_outline),
     };
@@ -239,7 +263,13 @@ class _WeComScanPageState extends State<WeComScanPage> {
       children: [
         Icon(icon, size: 18, color: colors.accent),
         const SizedBox(width: 8),
-        Text(text, style: ShuYoTextStyles.label(color: colors.accent)),
+        Flexible(
+          child: Text(
+            text,
+            textAlign: TextAlign.center,
+            style: ShuYoTextStyles.label(color: colors.accent),
+          ),
+        ),
       ],
     );
   }

@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/services.dart';
 
 import '../logging/shu_log.dart';
@@ -46,6 +48,9 @@ String formatConnectionTelemetry({
 /// 「屏幕黑着就不要打扰系统」，与这里的「内容没变就不要重复送」是两件事，
 /// 两道都要有。
 class ShuVpnNotification {
+  /// 常驻通知属于 Android 前台服务，桌面代理不使用原生 VPN 通道。
+  bool get isSupported => Platform.isAndroid;
+
   /// 上一次推出去的正文；[reset] 之后是 `null`。
   String? _lastText;
 
@@ -65,6 +70,7 @@ class ShuVpnNotification {
     required double downBytesPerSecond,
     required double? latencyMs,
   }) async {
+    if (!isSupported) return;
     final text = formatConnectionTelemetry(
       upBytesPerSecond: upBytesPerSecond,
       downBytesPerSecond: downBytesPerSecond,

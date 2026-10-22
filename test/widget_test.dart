@@ -189,6 +189,9 @@ class _FakeConnectionController extends ConnectionController {
     this.tunnelUp = false,
   });
 
+  @override
+  bool get vpnSupported => true;
+
   /// 「系统 VPN 接口建起来了没有」—— 它同时是那一行的状态词与它出不出
   /// 现的半个条件。
   @override
@@ -875,8 +878,14 @@ void main() {
   testWidgets(
     'the network page is HTTP, SOCKS5, Android VPN — and nothing else',
     (tester) async {
-      await _pumpApp(tester);
-      await _openSettings(tester, '网络连接');
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+      final settings = await SettingsStore.load();
+      await _pumpSettingsSubPage(
+        tester,
+        page: const ShuConnectionSettingsPage(),
+        settings: settings,
+        controller: _FakeConnectionController(settings),
+      );
 
       for (final label in <String>[
         'HTTP 代理',
@@ -1065,8 +1074,14 @@ void main() {
   testWidgets('the experimental page holds the TCP window switch', (
     tester,
   ) async {
-    await _pumpApp(tester);
-    await _openSettings(tester, '实验性选项');
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final settings = await SettingsStore.load();
+    await _pumpSettingsSubPage(
+      tester,
+      page: const ShuExperimentalSettingsPage(),
+      settings: settings,
+      controller: _FakeConnectionController(settings),
+    );
 
     // 「TCP 走 L3」那一条连同页首的警告一起撤掉了：它要验证的事已经有结论
     // （网关不接受 TCP-over-L3），那条路改由本机终结器接管。
@@ -1087,15 +1102,19 @@ void main() {
     expect(find.text('系统 VPN'), findsOneWidget);
     expect(find.text('引导'), findsOneWidget);
     expect(find.text('新用户引导'), findsOneWidget);
-
-    await _back(tester);
   });
 
   testWidgets('the TCP window switch flips the stored value and its caption', (
     tester,
   ) async {
-    await _pumpApp(tester);
-    await _openSettings(tester, '实验性选项');
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final settings = await SettingsStore.load();
+    await _pumpSettingsSubPage(
+      tester,
+      page: const ShuExperimentalSettingsPage(),
+      settings: settings,
+      controller: _FakeConnectionController(settings),
+    );
 
     await tester.tap(find.byType(SwitchListTile));
     await tester.pumpAndSettle();
@@ -1107,16 +1126,18 @@ void main() {
     // 的唯一地方。
     expect(find.text('64 KB'), findsOneWidget);
 
-    // 退出再进来，值还在 —— 说明它写进了 store，不只是界面上的一个开关。
-    await _back(tester);
-    await tester.tap(_settingsRow('实验性选项'));
-    await tester.pumpAndSettle();
+    // 重新读取设置并构建页面，确认开关已经写入持久存储。
+    final reloaded = await SettingsStore.load();
+    await _pumpSettingsSubPage(
+      tester,
+      page: const ShuExperimentalSettingsPage(),
+      settings: reloaded,
+      controller: _FakeConnectionController(reloaded),
+    );
     expect(
       tester.widget<SwitchListTile>(find.byType(SwitchListTile)).value,
       isFalse,
     );
-
-    await _back(tester);
   });
 
   testWidgets('the experimental page can send you back through onboarding', (
@@ -1127,7 +1148,7 @@ void main() {
 
     // 这一页上引导入口仍然只有一个，而且它不是开关。
     expect(find.text('新用户引导'), findsOneWidget);
-    expect(find.byType(SwitchListTile), findsOneWidget);
+    expect(find.byType(SwitchListTile), findsNothing);
 
     await tester.tap(_settingsRow('新用户引导'));
     await tester.pumpAndSettle();

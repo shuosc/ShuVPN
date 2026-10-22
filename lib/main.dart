@@ -1,15 +1,13 @@
-// ShuVPN — Sangfor aTrust RVPN client for Android.
+// ShuVPN — Sangfor aTrust RVPN client for Android and Windows.
 //
 // Architecture: `lib/app` owns the theme, the router and the provider scope;
 // `lib/core` owns the state that outlives a screen (connection, account,
 // settings); `lib/features` owns the screens; `lib/shell` owns the floating
 // dock that ties the three top-level destinations together.
 //
-// Data plane: two of them, sharing one tunnel. On Android the default is the
-// system `VpnService` (`AndroidVpnDevice` fed by `SangforTunnelRouter`), which
-// takes over all traffic with a single permission prompt. The userspace SOCKS5
-// frontend is the opt-in alternative for letting just a few apps through; it
-// binds loopback by default and needs no permission at all.
+// Data planes share one tunnel. Android defaults to the system `VpnService`;
+// Windows uses the userspace HTTP and SOCKS5 proxies, with no TUN driver.
+// Both proxies bind loopback by default and need no administrator privileges.
 //
 // Error handling: every failure path throws a typed `SangforException`. Nothing
 // is swallowed — a cancelled prompt, an unreachable server and a certificate

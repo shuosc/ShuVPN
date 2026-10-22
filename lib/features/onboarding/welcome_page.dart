@@ -437,6 +437,13 @@ class _ShuWelcomePageState extends State<ShuWelcomePage> {
         ),
       ),
       children: [
+        if (!connection.vpnSupported)
+          _feature(
+            Icons.settings_ethernet,
+            '使用本机代理',
+            '连接后，将 HTTP 或 SOCKS5 地址填入支持代理的浏览器或应用。'
+                'ShuVPN 不会自动修改系统代理，也不接管整机网络。使用期间请保持应用运行。',
+          ),
         // 裸列表：一行一项，行本身就是申请入口（点一下弹系统对话框）。
         for (final permission in requirements)
           _permissionRow(context, connection, permission),

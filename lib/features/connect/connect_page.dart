@@ -597,7 +597,8 @@ class _ConnectionDrawerState extends State<_ConnectionDrawer> {
             label: 'SOCKS5 代理地址',
           ),
         ),
-      if (settings.vpnEnabled || controller.vpnRunning)
+      if (controller.vpnSupported &&
+          (settings.vpnEnabled || controller.vpnRunning))
         _DrawerRow(
           icon: Icons.vpn_lock_outlined,
           title: 'Android VPN 服务',

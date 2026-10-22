@@ -21,12 +21,14 @@ class ShuNotificationPermission {
   bool get isSupported => Platform.isAndroid;
 
   /// 查一次当前状态：系统允许发通知就是 true。
-  Future<bool> isGranted() => ShuAndroidVpn.isNotificationGranted;
+  Future<bool> isGranted() async =>
+      isSupported && await ShuAndroidVpn.isNotificationGranted;
 
   /// 弹系统授权对话框。
   ///
   /// 已经允许、或系统没有这个对话框（Android 13 以下）时原生侧直接回当前
   /// 状态、**不弹**（见 `ShuAndroidVpn.requestNotificationPermission`），
   /// 所以重复调用是安全的。
-  Future<bool> request() => ShuAndroidVpn.requestNotificationPermission();
+  Future<bool> request() async =>
+      isSupported && await ShuAndroidVpn.requestNotificationPermission();
 }

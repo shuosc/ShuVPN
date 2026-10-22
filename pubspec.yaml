@@ -1,5 +1,5 @@
 name: shuvpn
-description: "SHU RVPN (Sangfor EasyConnect / aTrust) client for Android, signed in through the university's unified identity provider."
+description: "SHU RVPN (Sangfor EasyConnect / aTrust) client for Android and Windows, signed in through the university's unified identity provider."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev

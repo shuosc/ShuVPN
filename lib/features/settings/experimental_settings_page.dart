@@ -24,27 +24,30 @@ class ShuExperimentalSettingsPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final settings = context.watch<SettingsStore>();
-    final locked = context.watch<ConnectionController>().tunnelUp;
+    final connection = context.watch<ConnectionController>();
+    final locked = connection.tunnelUp;
 
     return ShuSettingsSubPage(
       title: '实验性选项',
       banner: locked ? const ShuNoticeBar(shuSettingsLockedNotice) : null,
       children: [
-        const SectionHeader(title: '系统 VPN'),
-        SettingsSwitchRow(
-          icon: Icons.swap_horiz,
-          title: 'TCP 接收窗口缩放',
-          subtitle: settings.vpnTcpWindowScaling ? '1 MiB' : '64 KB',
-          value: settings.vpnTcpWindowScaling,
-          enabled: !locked,
-          onChanged: (value) => settings.vpnTcpWindowScaling = value,
-        ),
-        const ShuSettingsNote(
-          '只影响系统 VPN 那一半：它的 TCP 由本机终结器逐流接管，'
-          '终结器通告给本机协议栈的接收窗口就是每条连接的在途上限。'
-          '16 位窗口字段最多认 64 KB，而这段往返走的是应用自己的事件循环，'
-          '于是「64 KB ÷ 往返」成了单连接吞吐的天花板 —— 应用越忙它越低。',
-        ),
+        if (connection.vpnSupported) ...[
+          const SectionHeader(title: '系统 VPN'),
+          SettingsSwitchRow(
+            icon: Icons.swap_horiz,
+            title: 'TCP 接收窗口缩放',
+            subtitle: settings.vpnTcpWindowScaling ? '1 MiB' : '64 KB',
+            value: settings.vpnTcpWindowScaling,
+            enabled: !locked,
+            onChanged: (value) => settings.vpnTcpWindowScaling = value,
+          ),
+          const ShuSettingsNote(
+            '只影响系统 VPN 那一半：它的 TCP 由本机终结器逐流接管，'
+            '终结器通告给本机协议栈的接收窗口就是每条连接的在途上限。'
+            '16 位窗口字段最多认 64 KB，而这段往返走的是应用自己的事件循环，'
+            '于是「64 KB ÷ 往返」成了单连接吞吐的天花板 —— 应用越忙它越低。',
+          ),
+        ],
 
         const SectionHeader(title: '引导'),
         SettingsRow(

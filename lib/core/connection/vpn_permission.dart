@@ -24,11 +24,13 @@ class ShuVpnPermission {
   bool get isSupported => Platform.isAndroid;
 
   /// 查一次当前状态：系统已经授权过就是 true。
-  Future<bool> isPrepared() => ShuAndroidVpn.isPrepared;
+  Future<bool> isPrepared() async =>
+      isSupported && await ShuAndroidVpn.isPrepared;
 
   /// 弹系统授权对话框。
   ///
   /// 已经授权过时原生侧直接回 true、**不弹**（见 `ShuVpnPlugin.requestPermission`），
   /// 所以重复调用是安全的。
-  Future<bool> request() => ShuAndroidVpn.requestPermission();
+  Future<bool> request() async =>
+      isSupported && await ShuAndroidVpn.requestPermission();
 }

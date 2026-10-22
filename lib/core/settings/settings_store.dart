@@ -19,8 +19,8 @@ import '../logging/shu_log.dart';
 /// | 数据面 | 开关 | 出厂值 |
 /// | :--- | :--- | :--- |
 /// | 系统 VPN（TUN） | [vpnEnabled] | 安卓上 true |
-/// | 本机 SOCKS5 | [socksProxyEnabled] | false |
-/// | 本机 HTTP | [httpProxyEnabled] | false |
+/// | 本机 SOCKS5 | [socksProxyEnabled] | Windows 上 true，其余 false |
+/// | 本机 HTTP | [httpProxyEnabled] | Windows 上 true，其余 false |
 ///
 /// 三条互不排斥，服务对象不同：系统 VPN 接管整机流量，两条本机代理只服务
 /// 「自己会把代理地址填进去」的应用。**三条之间没有依赖**：系统 VPN 那一半
@@ -137,9 +137,11 @@ class SettingsStore extends ChangeNotifier {
 
   /// 「启用本机 SOCKS5 代理」—— 隧道起来之后要不要把 SOCKS5 拉起来。
   ///
-  /// 出厂值 **false**：安卓上默认走系统 VPN（[vpnEnabled]），本机代理是给
-  /// 「只想让某几个应用走隧道」的场景准备的。
-  bool get socksProxyEnabled => _prefs.getBool(_kAutoStartProxy) ?? false;
+  /// Windows 出厂开启：桌面版暂不提供 TUN，支持 SOCKS5 的应用需要通过
+  /// 这条本机通道访问隧道。其余平台出厂关闭；安卓默认走系统 VPN。
+  bool get socksProxyEnabled =>
+      _prefs.getBool(_kAutoStartProxy) ??
+      defaultTargetPlatform == TargetPlatform.windows;
 
   set socksProxyEnabled(bool value) => _writeBool(_kAutoStartProxy, value);
 
@@ -150,9 +152,11 @@ class SettingsStore extends ChangeNotifier {
   /// 填。两个通道对着不同的消费者，混在一个开关里会让「我只想让浏览器走
   /// 隧道」和「我要接管全部应用」变成同一件事。
   ///
-  /// 出厂值 **false**。它**不被任何其他数据面强拉**：系统 VPN 的 TCP 那一半
-  /// 由本机终结器接管，不需要谁去当系统代理。
-  bool get httpProxyEnabled => _prefs.getBool(_kHttpEnabled) ?? false;
+  /// Windows 出厂开启，供浏览器或手动配置 HTTP 代理的应用使用；其余平台
+  /// 出厂关闭。这里只启动本机监听，不修改 Windows 系统代理。
+  bool get httpProxyEnabled =>
+      _prefs.getBool(_kHttpEnabled) ??
+      defaultTargetPlatform == TargetPlatform.windows;
 
   set httpProxyEnabled(bool value) => _writeBool(_kHttpEnabled, value);
 
@@ -172,11 +176,11 @@ class SettingsStore extends ChangeNotifier {
   ///
   /// 出厂值 **安卓上为 true**：这是把隧道真正用起来的那条路（不需要用户
   /// 逐应用配置代理），也是官方客户端的行为。其它平台没有 `VpnService`，
-  /// 只能回落到本机代理。
+  /// 只能回落到本机代理。导入 Android 设置时也不能在其它平台启用 TUN；
+  /// 磁盘原值保留，读取时按当前平台的能力决定是否生效。
   bool get vpnEnabled {
-    final stored = _prefs.getBool(_kVpnEnabled);
-    if (stored != null) return stored;
-    return defaultTargetPlatform == TargetPlatform.android;
+    if (defaultTargetPlatform != TargetPlatform.android) return false;
+    return _prefs.getBool(_kVpnEnabled) ?? true;
   }
 
   set vpnEnabled(bool value) => _writeBool(_kVpnEnabled, value);

@@ -177,45 +177,53 @@ class _ShuConnectionSettingsPageState extends State<ShuConnectionSettingsPage> {
           ),
         ],
 
-        const SectionHeader(title: 'Android VPN 服务'),
-        SettingsSwitchRow(
-          icon: Icons.vpn_lock_outlined,
-          title: '启用 VPN 服务',
-          value: settings.vpnEnabled,
-          enabled: editable,
-          onChanged: (value) => _toggleVpn(settings, connection, value),
-        ),
-        SettingsRow(
-          icon: Icons.verified_user_outlined,
-          title: '系统授权状态',
-          value: status.text,
-          valueColor: status.color,
-          // 未连接时点它可以补一次授权（授权也可以在系统设置里被撤销，
-          // 所以这一行是只读观测 + 一个重新询问的入口）。隧道跑起来之后
-          // 连它也封住 —— 这一页在运行期「整页不可改」是一条不打折的
-          // 规则，留一个例外只会让人以为别的行说不定也能点。
-          enabled: !locked,
-          onTap: connection.vpnSupported && !locked
-              ? () => _requestPermission(connection)
-              : null,
-        ),
-        SettingsRow(
-          icon: Icons.straighten,
-          title: 'MTU',
-          value: '${settings.vpnMtu}',
-          enabled: editable,
-          onTap: () => _pickMtu(settings),
-        ),
-        SettingsRow(
-          icon: Icons.dns_outlined,
-          title: 'DNS',
-          // 留空 = 用底层网络那一组（原生侧会自己从系统取，并在 API 33+
-          // 把它们排除在隧道之外）。不指网关下发的那一组：那些是内网
-          // 地址，在底层网络里不可达。
-          value: settings.vpnDns.isEmpty ? '跟随系统' : settings.vpnDns,
-          enabled: editable,
-          onTap: () => _pickDns(settings),
-        ),
+        if (!connection.vpnSupported)
+          const ShuSettingsNote(
+            '当前平台通过本机 HTTP / SOCKS5 代理访问校内资源，不接管整机网络。'
+            '连接后，在支持代理的浏览器或应用中填写连接页显示的代理地址和端口。'
+            'ShuVPN 不会自动修改系统代理；退出应用后，本机代理随之停止。',
+          ),
+        if (connection.vpnSupported) ...[
+          const SectionHeader(title: 'Android VPN 服务'),
+          SettingsSwitchRow(
+            icon: Icons.vpn_lock_outlined,
+            title: '启用 VPN 服务',
+            value: settings.vpnEnabled,
+            enabled: editable,
+            onChanged: (value) => _toggleVpn(settings, connection, value),
+          ),
+          SettingsRow(
+            icon: Icons.verified_user_outlined,
+            title: '系统授权状态',
+            value: status.text,
+            valueColor: status.color,
+            // 未连接时点它可以补一次授权（授权也可以在系统设置里被撤销，
+            // 所以这一行是只读观测 + 一个重新询问的入口）。隧道跑起来之后
+            // 连它也封住 —— 这一页在运行期「整页不可改」是一条不打折的
+            // 规则，留一个例外只会让人以为别的行说不定也能点。
+            enabled: !locked,
+            onTap: connection.vpnSupported && !locked
+                ? () => _requestPermission(connection)
+                : null,
+          ),
+          SettingsRow(
+            icon: Icons.straighten,
+            title: 'MTU',
+            value: '${settings.vpnMtu}',
+            enabled: editable,
+            onTap: () => _pickMtu(settings),
+          ),
+          SettingsRow(
+            icon: Icons.dns_outlined,
+            title: 'DNS',
+            // 留空 = 用底层网络那一组（原生侧会自己从系统取，并在 API 33+
+            // 把它们排除在隧道之外）。不指网关下发的那一组：那些是内网
+            // 地址，在底层网络里不可达。
+            value: settings.vpnDns.isEmpty ? '跟随系统' : settings.vpnDns,
+            enabled: editable,
+            onTap: () => _pickDns(settings),
+          ),
+        ],
       ],
     );
   }

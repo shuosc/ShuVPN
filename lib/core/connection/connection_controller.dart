@@ -1169,7 +1169,7 @@ class ConnectionController extends ChangeNotifier {
     if (succeeded) {
       _startStats();
       // 三条数据面互不排斥，各自跟着自己的开关起来，谁也不强拉谁。
-      if (_settings.vpnEnabled) await startVpn();
+      if (vpnSupported && _settings.vpnEnabled) await startVpn();
       if (_settings.socksProxyEnabled) await startSocksProxy();
       if (_settings.httpProxyEnabled) await startHttpProxy();
     }
@@ -1916,6 +1916,7 @@ class ConnectionController extends ChangeNotifier {
   /// 的边界 —— 那一下会把 Activity 连同 Flutter 引擎一起销毁，Dart 侧整个
   /// 停摆，而这是这一层拦不住的事。
   Future<void> _ensureForeground() async {
+    if (!_foreground.isSupported) return;
     _listenForNotificationActions();
     if (!await _foreground.attach()) return;
     // 通知不能先停在原生侧那句「已连接」上，等一秒后第一次采样才换成读数行。
@@ -1938,6 +1939,7 @@ class ConnectionController extends ChangeNotifier {
   /// 拉起来了（[ShuForegroundService.attach] 那时返回 false）——订阅挂在
   /// 「有没有订阅过」上，不挂在「这一下有没有把它拉起来」上。
   void _listenForNotificationActions() {
+    if (!_foreground.isSupported) return;
     _notificationSub ??= ShuAndroidVpn.disconnectRequests.listen((_) {
       ShuLog.i(ShuLogTag.vpn, '通知栏请求断开');
       unawaited(disconnect());

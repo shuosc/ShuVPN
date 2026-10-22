@@ -8,6 +8,11 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shuvpn/core/connection/vpn_notification.dart';
 
+class _FakeVpnNotification extends ShuVpnNotification {
+  @override
+  bool get isSupported => true;
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -88,7 +93,7 @@ void main() {
     );
 
     test('第一次推就穿过通道，只有正文一项参数', () async {
-      await push(ShuVpnNotification(), latency: null);
+      await push(_FakeVpnNotification(), latency: null);
 
       expect(calls, hasLength(1));
       expect(calls.single.method, 'updateNotification');
@@ -98,7 +103,7 @@ void main() {
     });
 
     test('读数完全没变就不推', () async {
-      final notification = ShuVpnNotification();
+      final notification = _FakeVpnNotification();
       await push(notification);
       await push(notification);
       await push(notification);
@@ -107,7 +112,7 @@ void main() {
     });
 
     test('三个数里任何一个变了都推', () async {
-      final notification = ShuVpnNotification();
+      final notification = _FakeVpnNotification();
       await push(notification);
       await push(notification, latency: 140);
       await push(notification, latency: 140, down: 4096);
@@ -116,7 +121,7 @@ void main() {
     });
 
     test('reset 之后同一个读数还会再推一次', () async {
-      final notification = ShuVpnNotification();
+      final notification = _FakeVpnNotification();
       await push(notification);
       await push(notification);
       notification.reset();
@@ -129,7 +134,7 @@ void main() {
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(channel, null);
 
-      await expectLater(push(ShuVpnNotification()), completes);
+      await expectLater(push(_FakeVpnNotification()), completes);
     });
   });
 }
