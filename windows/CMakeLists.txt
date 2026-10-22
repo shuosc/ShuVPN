@@ -79,6 +79,12 @@ install(TARGETS ${BINARY_NAME} RUNTIME DESTINATION "${CMAKE_INSTALL_PREFIX}"
 # also runs on machines that do not have Visual Studio installed.
 set(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS_SKIP TRUE)
 include(InstallRequiredSystemLibraries)
+# The ARM64 redist directory also contains an x64/EC compatibility exception
+# runtime. Native ARM64 binaries use vcruntime140.dll; do not bundle the
+# incompatible vcruntime140_1.dll. The packaging script verifies imports too.
+if(FLUTTER_TARGET_PLATFORM STREQUAL "windows-arm64")
+  list(FILTER CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS EXCLUDE REGEX "/vcruntime140_1\\.dll$")
+endif()
 install(PROGRAMS ${CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS}
   DESTINATION "${INSTALL_BUNDLE_LIB_DIR}" COMPONENT Runtime)
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/../LICENSE"
