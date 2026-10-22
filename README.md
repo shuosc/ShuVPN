@@ -19,11 +19,6 @@ Android 版本可以打开 [release 页面](https://github.com/shuosc/ShuVPN/rel
 ### Windows
 Windows 版本可以打开 [release 页面](https://github.com/shuosc/ShuVPN/releases)下载，支持 Windows 10/11 x64。完整解压后运行 `shuvpn.exe`，无需安装或管理员权限。（请保留解压后的全部文件）
 
-登录并连接后，您需要在浏览器或应用中配置 HTTP 或 SOCKS5 代理，地址以连接页显示为准，也可以在「设置 → 网络连接」中调整：
-
-- HTTP 代理默认地址：`127.0.0.1:3322`，支持访问 HTTP 与 HTTPS 网站。
-- SOCKS5 代理默认地址：`127.0.0.1:2233`，访问校内域名时请选择通过代理解析 DNS。
-
 目前 Windows 版本仅支持代理连接，需要手动配置系统或应用代理。使用时请保持应用运行，最小化不影响连接，关闭窗口则会断开连接。
 
 ### MacOS/Linux
