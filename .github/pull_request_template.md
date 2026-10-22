@@ -7,6 +7,7 @@
 ## 平台影响
 
 - [ ] Android
+- [ ] Windows
 - [ ] 不涉及平台代码
 
 ## 测试情况
@@ -14,3 +15,4 @@
 - [ ] 已运行 `flutter analyze`
 - [ ] 已运行 `flutter test`
 - [ ] 已进行安卓真机或模拟器验证
+- [ ] 已进行 Windows 构建或运行验证

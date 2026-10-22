@@ -15,8 +15,13 @@ concurrency:
 
 jobs:
   analyze-and-test:
-    name: Analyze and test
-    runs-on: ubuntu-latest
+    name: ${{ matrix.os == 'ubuntu-latest' && 'Analyze and test' || 'Windows build and test' }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
 
     steps:
       - name: Check out repository
@@ -66,6 +71,7 @@ jobs:
         if: steps.changes.outputs.code == 'true'
         uses: subosito/flutter-action@v2
         with:
+          flutter-version: "3.47.2"
           channel: stable
           cache: true
 
@@ -79,7 +85,23 @@ jobs:
 
       - name: Run tests
         if: steps.changes.outputs.code == 'true'
-        run: flutter test
+        run: flutter test --concurrency=1
+
+      - name: Build and package Windows
+        if: steps.changes.outputs.code == 'true' && runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/build_windows.ps1
+
+      - name: Upload Windows build
+        if: steps.changes.outputs.code == 'true' && runner.os == 'Windows'
+        uses: actions/upload-artifact@v7
+        with:
+          name: shuvpn-windows-x64-${{ github.sha }}
+          path: |
+            build/windows/ShuVPN-windows-x64.zip
+            build/windows/ShuVPN-windows-x64.zip.sha256
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Skip Flutter checks for documentation-only changes
         if: steps.changes.outputs.code != 'true'

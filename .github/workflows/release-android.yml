@@ -10,7 +10,8 @@ permissions:
   attestations: write
 
 concurrency:
-  group: android-release
+  # Both platforms may append assets to the same version; serialize publication.
+  group: shuvpn-release
   cancel-in-progress: false
 
 jobs:
@@ -98,10 +99,10 @@ jobs:
             echo
             echo "### Verifying the download"
             echo
-            echo "This APK carries a signed build provenance attestation. Verify it with the GitHub CLI:"
+            echo "Release binaries carry signed build provenance attestations. Verify a downloaded APK or ZIP with the GitHub CLI:"
             echo
             echo '```'
-            echo "gh attestation verify ${APK_NAME} --repo ${GITHUB_REPOSITORY}"
+            echo "gh attestation verify <downloaded-file> --repo ${GITHUB_REPOSITORY}"
             echo '```'
             echo "RELEASE_NOTES_EOF"
           } >> "$GITHUB_OUTPUT"
@@ -234,7 +235,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Create GitHub Release
+      - name: Create or extend GitHub Release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -245,8 +246,10 @@ jobs:
           set -euo pipefail
 
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "Release $RELEASE_TAG already exists. Edit or delete that release, or update pubspec.yaml."
-            exit 1
+            # Version validation above already requires an existing tag to
+            # point to this exact commit. Preserve the other platform's assets.
+            gh release upload "$RELEASE_TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+            exit 0
           fi
 
           release_args=(
