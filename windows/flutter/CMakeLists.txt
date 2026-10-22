@@ -21,7 +21,7 @@ set(FLUTTER_LIBRARY "${EPHEMERAL_DIR}/flutter_windows.dll")
 # Published to parent scope for install step.
 set(FLUTTER_LIBRARY ${FLUTTER_LIBRARY} PARENT_SCOPE)
 set(FLUTTER_ENGINE_LICENSE
-  "${FLUTTER_ROOT}/bin/cache/artifacts/engine/windows-x64-release/license.windows_flutter.md"
+  "${FLUTTER_ROOT}/bin/cache/artifacts/engine/${FLUTTER_TARGET_PLATFORM}-release/license.windows_flutter.md"
   PARENT_SCOPE)
 set(FLUTTER_ICU_DATA_FILE "${EPHEMERAL_DIR}/icudtl.dat" PARENT_SCOPE)
 set(PROJECT_BUILD_DIR "${PROJECT_DIR}/build/" PARENT_SCOPE)
