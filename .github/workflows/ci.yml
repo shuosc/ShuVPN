@@ -14,14 +14,26 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  analyze-and-test:
-    name: ${{ matrix.os == 'ubuntu-latest' && 'Analyze and test' || 'Windows build and test' }}
+  build-and-test:
+    name: ${{ matrix.platform }} build and test
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        include:
+          - platform: Android
+            os: ubuntu-latest
+            build-command: flutter build apk --release --split-per-abi --target-platform android-arm64
+            artifact-name: shuvpn-android-arm64
+            artifact-path: build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+          - platform: Windows
+            os: windows-latest
+            build-command: ./scripts/build_windows.ps1
+            artifact-name: shuvpn-windows-x64
+            artifact-path: |
+              build/windows/ShuVPN-windows-x64.zip
+              build/windows/ShuVPN-windows-x64.zip.sha256
 
     steps:
       - name: Check out repository
@@ -67,6 +79,14 @@ jobs:
 
           echo "code=$code_changed" >> "$GITHUB_OUTPUT"
 
+      - name: Set up Java
+        if: steps.changes.outputs.code == 'true' && matrix.platform == 'Android'
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
       - name: Set up Flutter
         if: steps.changes.outputs.code == 'true'
         uses: subosito/flutter-action@v2
@@ -87,19 +107,17 @@ jobs:
         if: steps.changes.outputs.code == 'true'
         run: flutter test --concurrency=1
 
-      - name: Build and package Windows
-        if: steps.changes.outputs.code == 'true' && runner.os == 'Windows'
+      - name: Build application
+        if: steps.changes.outputs.code == 'true'
         shell: pwsh
-        run: ./scripts/build_windows.ps1
+        run: ${{ matrix.build-command }}
 
-      - name: Upload Windows build
-        if: steps.changes.outputs.code == 'true' && runner.os == 'Windows'
+      - name: Upload build
+        if: steps.changes.outputs.code == 'true'
         uses: actions/upload-artifact@v7
         with:
-          name: shuvpn-windows-x64-${{ github.sha }}
-          path: |
-            build/windows/ShuVPN-windows-x64.zip
-            build/windows/ShuVPN-windows-x64.zip.sha256
+          name: ${{ matrix.artifact-name }}-${{ github.sha }}
+          path: ${{ matrix.artifact-path }}
           if-no-files-found: error
           retention-days: 14
 
