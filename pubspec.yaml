@@ -20,28 +20,20 @@ dependencies:
   flutter:
     sdk: flutter
 
-  # Sangfor aTrust / Easy Connect support, in pure Dart.
-  #
-  # `flutter_sangfor` owns the session lifecycle and the userspace SOCKS5
-  # frontend; the two connector packages carry the protocol cores and never
-  # depend on each other. All three are published on pub.dev.
-  #
-  # The root package is overridden below to the `preca-hoshino` fork, which is
-  # the seam where a fix would land if upstream does not take one. The Android
-  # `VpnTunnelService` bug it exists for is still present in 0.0.12 -- see the
-  # class doc in `lib/core/connection/shu_android_vpn.dart` for what it does
-  # and why the app runs its own `ShuVpnService` instead.
-  #
-  # Pinned to exact versions on purpose, not `^0.0.12`. The three are published
-  # in lockstep and do not compile when a connector moves ahead of the root
-  # package -- 0.0.8's `tcp_termination.dart` builds on types that only that
-  # release's root package defines. The lock records the mirror URL it was
-  # written against, so CI -- which talks to pub.dev -- discards it and
-  # re-resolves; exact pins make that re-resolution land on the same versions
-  # either way. Lift all three together, then drop these pins back to a caret.
-  flutter_sangfor: 0.0.12
-  flutter_sangfor_easy_connect: 0.0.12
-  flutter_sangfor_atrust: 0.0.12
+  # Use all three packages from the fork's default GitHub branch together.
+  # No version or ref constraint; pubspec.lock records the resolved commit.
+  flutter_sangfor:
+    git:
+      url: https://github.com/preca-hoshino/flutter_sangfor.git
+      path: packages/flutter_sangfor
+  flutter_sangfor_easy_connect:
+    git:
+      url: https://github.com/preca-hoshino/flutter_sangfor.git
+      path: packages/flutter_sangfor_easy_connect
+  flutter_sangfor_atrust:
+    git:
+      url: https://github.com/preca-hoshino/flutter_sangfor.git
+      path: packages/flutter_sangfor_atrust
 
   # The userspace SOCKS5 frontend. Pure Dart, so it runs on every platform
   # the app does -- that is what makes the proxy the fallback data plane
@@ -80,17 +72,12 @@ dev_dependencies:
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
 
-# `flutter_sangfor_atrust` / `flutter_sangfor_easy_connect` declare
-# `flutter_sangfor` as a hosted dependency; an override is the only way to make
-# every dependent resolve to the fork instead. `ref: main` is pinned by the SHA
-# recorded in `pubspec.lock`, so advancing the fork takes an explicit
-# `flutter pub upgrade` plus the lock commit. Drop this block once the patches
-# land upstream.
+# The connectors declare the root as a hosted dependency. Override that
+# transitive requirement so every package uses the same GitHub checkout.
 dependency_overrides:
   flutter_sangfor:
     git:
       url: https://github.com/preca-hoshino/flutter_sangfor.git
-      ref: main
       path: packages/flutter_sangfor
 
 # For information on the generic Dart part of this file, see the
