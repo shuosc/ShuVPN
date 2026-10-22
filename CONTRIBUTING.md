@@ -30,6 +30,7 @@ flutter run -d <device-id>
 ```
 
 Android 开发需要 Android Studio 和已配置的 Android SDK。
+Windows 开发需要 Visual Studio 的「使用 C++ 的桌面开发」工作负载、MSVC、CMake 和 Windows SDK；使用 `flutter doctor -v` 检查后可运行 `flutter run -d windows`。
 <!-- iOS 开发需要 Xcode，以及可用的 Simulator 或真机设备。 -->
 
 ## 项目方向与功能建议
@@ -66,7 +67,6 @@ ShuVPN 正在快速迭代补齐功能中，欢迎你在下列预备开发计划�
 5. 如果改动涉及平台侧代码，请在受影响的平台上使用 Simulator 或真机测试，并在 Pull Request 中说明结果。
 6. 使用仓库的 [Pull Request 模板](.github/pull_request_template.md) 创建 PR，说明改动内容、关联的 Issue、受影响的平台以及已经执行的检查。
 
-`Flutter CI` 工作流会对推送到 `main` 的提交，以及目标分支为 `main` 的 Pull Request，运行 `flutter analyze` 和 `flutter test`。
 
 ## 代码风格
 
