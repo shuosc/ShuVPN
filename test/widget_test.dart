@@ -464,6 +464,15 @@ void main() {
 
     // 而且它甩到的正是「拉开」那一档：抽屉露出来的高度与内容需要的高度一致。
     expect(_drawerHeight(tester), closeTo(_drawerContentHeight(tester), 1));
+
+    // 桌面鼠标适配不能改变原来的触摸返回手势。
+    await tester.dragFrom(
+      tester.getCenter(find.byKey(ConnectPage.statusRowKey)),
+      const Offset(0, 300),
+    );
+    await tester.pumpAndSettle();
+    expect(_drawerRowTop(tester), closeTo(collapsed, 1));
+    expect(_scrimAlpha(tester), 0);
   });
 
   testWidgets('the drawer opens to exactly the height its content needs', (

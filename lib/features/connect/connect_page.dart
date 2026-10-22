@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_sangfor/flutter_sangfor.dart';
@@ -265,6 +266,7 @@ class _ConnectionDrawer extends StatefulWidget {
 
 class _ConnectionDrawerState extends State<_ConnectionDrawer> {
   final DraggableScrollableController _sheet = DraggableScrollableController();
+  ScrollController? _contentScroll;
 
   /// 量内容高度用的锚点。
   ///
@@ -388,18 +390,58 @@ class _ConnectionDrawerState extends State<_ConnectionDrawer> {
     // 排到这一帧画完之后再做。
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !_sheet.isAttached) return;
+      _resetContentScroll();
       _sheet.jumpTo(_min);
     });
   }
 
+  void _resetContentScroll() {
+    final scroll = _contentScroll;
+    if (scroll != null && scroll.hasClients && scroll.offset != 0) {
+      scroll.jumpTo(0);
+    }
+  }
+
   void _animateTo(double size) {
     if (!_sheet.isAttached) return;
+    if (size == _min) _resetContentScroll();
     _sheet.animateTo(size, duration: ShuMotion.base, curve: ShuMotion.curve);
+  }
+
+  /// 滚轮先展开面板，再滚动内容。默认 ScrollPosition.pointerScroll 只会
+  /// 改内容偏移，不会调整 DraggableScrollableSheet 的高度，结果把手与状态行
+  /// 会从收起的面板里滚走。让内容上的监听器先参与信号仲裁，面板到顶后仍由
+  /// Scrollable 正常处理溢出内容的滚动。
+  void _onPointerSignal(PointerSignalEvent event) {
+    if (event is! PointerScrollEvent ||
+        event.scrollDelta.dy == 0 ||
+        !_sheet.isAttached) {
+      return;
+    }
+    final scroll = _contentScroll;
+    if (scroll == null || !scroll.hasClients) return;
+    final expanding = event.scrollDelta.dy > 0;
+    final resize = expanding
+        ? _sheet.size < _max - _resizeEpsilon
+        : scroll.offset <= 0 && _sheet.size > _min + _resizeEpsilon;
+    if (!resize) return;
+    GestureBinding.instance.pointerSignalResolver.register(event, (_) {
+      _animateTo(expanding ? _max : _min);
+    });
   }
 
   @override
   Widget build(BuildContext context) {
     final colors = context.shuyoColors;
+    // 只在抽屉内允许鼠标拖动；其它页面的文本选择保留桌面默认行为。
+    // 自动桌面滚动条操作的是内部列表偏移，不能用来调整抽屉高度。
+    final scrollBehavior = ScrollConfiguration.of(context).copyWith(
+      dragDevices: {
+        ...ScrollConfiguration.of(context).dragDevices,
+        PointerDeviceKind.mouse,
+      },
+      scrollbars: false,
+    );
     // 量内容高度只能在布局之后 —— 在 `build` 里 `setState` 会直接抛
     //「setState() or markNeedsBuild() called during build」。每帧排一个
     // 回调的代价可以忽略：`_measure` 在高度没变时会立刻返回。
@@ -485,64 +527,74 @@ class _ConnectionDrawerState extends State<_ConnectionDrawer> {
               // 两个吸引子，没有中间态 —— 这就是「两段式」。
               snap: true,
               snapSizes: _snapSizes,
-              builder: (context, scrollController) => DecoratedBox(
-                decoration: BoxDecoration(
-                  color: colors.background,
-                  borderRadius: const BorderRadius.vertical(
-                    top: Radius.circular(ShuRadii.card),
+              builder: (context, scrollController) {
+                _contentScroll = scrollController;
+                return DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: colors.background,
+                    borderRadius: const BorderRadius.vertical(
+                      top: Radius.circular(ShuRadii.card),
+                    ),
+                    border: Border(top: BorderSide(color: colors.border)),
                   ),
-                  border: Border(top: BorderSide(color: colors.border)),
-                ),
-                child: ClipRRect(
-                  borderRadius: const BorderRadius.vertical(
-                    top: Radius.circular(ShuRadii.card),
-                  ),
-                  // `SingleChildScrollView` 而不是 `ListView`：这一列内容
-                  // **必须是一个整体**才能量出自然高度 —— `ListView` 把每
-                  // 一行当成独立的孩子，那里面没有一个东西的高度是「内容
-                  // 一共多高」。
-                  //
-                  // 换成它不会影响拖拽：`DraggableScrollableSheet` 判「这一下
-                  // 该移动自己还是该滚列表」用的是 `pixels > 0` 与两档的边界，
-                  // **不看** `maxScrollExtent`（见 `draggable_scrollable_sheet.dart`
-                  // 的 `applyUserOffset`）。所以在未拉开那一档（内容露不全、
-                  // `maxScrollExtent > 0`）向上拖是抽屉长大；拉到内容高度之后
-                  // `maxScrollExtent` 正好是 0，也就正好停住 ——「不多给一个
-                  // 像素」这件事是内容高度算出来的结果，不是另写的一道判断。
-                  child: SingleChildScrollView(
-                    controller: scrollController,
-                    child: Padding(
-                      key: _contentKey,
-                      padding: const EdgeInsets.fromLTRB(
-                        ShuSpacing.page,
-                        0,
-                        ShuSpacing.page,
-                        16,
-                      ),
-                      child: Column(
-                        key: ConnectPage.contentKey,
-                        mainAxisSize: MainAxisSize.min,
-                        // `ListView` 给每个孩子的是紧宽度约束，这里要保持
-                        // 一样 —— 不然居中的小组件（把手那根横条）会缩成
-                        // 自己那么宽，命中区跟着变小。
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: <Widget>[
-                          _DrawerGrabber(
-                            key: ConnectPage.grabberKey,
-                            onTap: _toggle,
+                  child: ClipRRect(
+                    borderRadius: const BorderRadius.vertical(
+                      top: Radius.circular(ShuRadii.card),
+                    ),
+                    // `SingleChildScrollView` 而不是 `ListView`：这一列内容
+                    // **必须是一个整体**才能量出自然高度 —— `ListView` 把每
+                    // 一行当成独立的孩子，那里面没有一个东西的高度是「内容
+                    // 一共多高」。
+                    //
+                    // 换成它不会影响拖拽：`DraggableScrollableSheet` 判「这一下
+                    // 该移动自己还是该滚列表」用的是 `pixels > 0` 与两档的边界，
+                    // **不看** `maxScrollExtent`（见 `draggable_scrollable_sheet.dart`
+                    // 的 `applyUserOffset`）。所以在未拉开那一档（内容露不全、
+                    // `maxScrollExtent > 0`）向上拖是抽屉长大；拉到内容高度之后
+                    // `maxScrollExtent` 正好是 0，也就正好停住 ——「不多给一个
+                    // 像素」这件事是内容高度算出来的结果，不是另写的一道判断。
+                    child: ScrollConfiguration(
+                      behavior: scrollBehavior,
+                      child: SingleChildScrollView(
+                        controller: scrollController,
+                        child: Listener(
+                          behavior: HitTestBehavior.opaque,
+                          onPointerSignal: _onPointerSignal,
+                          child: Padding(
+                            key: _contentKey,
+                            padding: const EdgeInsets.fromLTRB(
+                              ShuSpacing.page,
+                              0,
+                              ShuSpacing.page,
+                              16,
+                            ),
+                            child: Column(
+                              key: ConnectPage.contentKey,
+                              mainAxisSize: MainAxisSize.min,
+                              // `ListView` 给每个孩子的是紧宽度约束，这里要保持
+                              // 一样 —— 不然居中的小组件（把手那根横条）会缩成
+                              // 自己那么宽，命中区跟着变小。
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: <Widget>[
+                                _DrawerGrabber(
+                                  key: ConnectPage.grabberKey,
+                                  onTap: _toggle,
+                                ),
+                                _ConnectionStatusRow(
+                                  key: ConnectPage.statusRowKey,
+                                  controller: widget.controller,
+                                  usable: widget.usable,
+                                ),
+                                ..._sections(context),
+                              ],
+                            ),
                           ),
-                          _ConnectionStatusRow(
-                            key: ConnectPage.statusRowKey,
-                            controller: widget.controller,
-                            usable: widget.usable,
-                          ),
-                          ..._sections(context),
-                        ],
+                        ),
                       ),
                     ),
                   ),
-                ),
-              ),
+                );
+              },
             ),
           ],
         );
@@ -664,21 +716,24 @@ class _DrawerGrabber extends StatelessWidget {
     return Semantics(
       button: true,
       label: '连接抽屉',
-      hint: '双击拉开或收起',
-      child: GestureDetector(
-        // `opaque` 让那根 4px 的横条周围的空白也算命中区域，
-        // 否则要把手指精确放在横条上才点得中。
-        behavior: HitTestBehavior.opaque,
-        onTap: onTap,
-        child: SizedBox(
-          height: 22,
-          child: Center(
-            child: Container(
-              width: 34,
-              height: 4,
-              decoration: BoxDecoration(
-                color: colors.border,
-                borderRadius: BorderRadius.circular(2),
+      hint: '拖动或点击拉开、收起',
+      child: MouseRegion(
+        cursor: SystemMouseCursors.resizeUpDown,
+        child: GestureDetector(
+          // `opaque` 让那根 4px 的横条周围的空白也算命中区域，
+          // 否则要把手指精确放在横条上才点得中。
+          behavior: HitTestBehavior.opaque,
+          onTap: onTap,
+          child: SizedBox(
+            height: 22,
+            child: Center(
+              child: Container(
+                width: 34,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: colors.border,
+                  borderRadius: BorderRadius.circular(2),
+                ),
               ),
             ),
           ),
