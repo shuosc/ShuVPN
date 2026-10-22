@@ -25,9 +25,9 @@ import 'package:shuvpn/features/notifications/notifications_page.dart';
 import 'package:shuvpn/features/onboarding/welcome_page.dart';
 import 'package:shuvpn/shell/floating_dock.dart';
 
-import 'shu_update_stub.dart';
+import '../support/shu_update_stub.dart';
 
-/// 与 `widget_test.dart` 的视口一致：一台高瘦的手机（逻辑 360×1800）。
+/// 与 `app_test.dart` 的视口一致：一台高瘦的手机（逻辑 360×1800）。
 void _viewport(WidgetTester tester) {
   tester.view.physicalSize = const Size(720, 3600);
   tester.view.devicePixelRatio = 2;

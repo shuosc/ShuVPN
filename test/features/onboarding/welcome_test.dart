@@ -32,9 +32,9 @@ import 'package:shuvpn/core/settings/settings_store.dart';
 import 'package:shuvpn/features/onboarding/welcome_page.dart';
 import 'package:shuvpn/shell/floating_dock.dart';
 
-import 'shu_update_stub.dart';
+import '../../support/shu_update_stub.dart';
 
-/// 一台真手机的视口，与 `widget_test.dart` 的 `_pumpApp` 同一套数字。
+/// 一台真手机的视口，与 `app_test.dart` 的 `_pumpApp` 同一套数字。
 Future<void> _viewport(WidgetTester tester) async {
   tester.view.physicalSize = const Size(720, 3600);
   tester.view.devicePixelRatio = 2;

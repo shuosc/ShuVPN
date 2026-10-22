@@ -29,7 +29,7 @@ import 'package:shuvpn/widgets/settings_scaffold.dart';
 import 'package:shuvpn/widgets/shu_app_bar.dart';
 import 'package:shuvpn/widgets/shu_surfaces.dart';
 
-import 'shu_update_stub.dart';
+import '../support/shu_update_stub.dart';
 
 Future<void> _pumpApp(
   WidgetTester tester, {

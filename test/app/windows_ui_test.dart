@@ -17,7 +17,7 @@ import 'package:shuvpn/features/settings/experimental_settings_page.dart';
 import 'package:shuvpn/features/settings/permission_info_page.dart';
 import 'package:shuvpn/shell/floating_dock.dart';
 
-import 'shu_update_stub.dart';
+import '../support/shu_update_stub.dart';
 
 class _WaitingWeComService extends ShuWeComAuthService {
   final _session = Completer<ShuWeComQrSession>();

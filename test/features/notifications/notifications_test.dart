@@ -9,7 +9,7 @@ import 'package:shuvpn/features/services/coming_soon_page.dart';
 import 'package:shuvpn/features/services/speedtest_page.dart';
 import 'package:shuvpn/shell/floating_dock.dart';
 
-import 'shu_update_stub.dart';
+import '../../support/shu_update_stub.dart';
 
 Future<void> _pumpApp(WidgetTester tester) async {
   tester.view.physicalSize = const Size(720, 1800);
