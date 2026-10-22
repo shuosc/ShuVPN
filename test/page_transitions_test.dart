@@ -25,7 +25,6 @@ import 'package:shuvpn/features/notifications/notifications_page.dart';
 import 'package:shuvpn/features/onboarding/welcome_page.dart';
 import 'package:shuvpn/shell/floating_dock.dart';
 
-import 'announcement_stub.dart';
 import 'shu_update_stub.dart';
 
 /// 与 `widget_test.dart` 的视口一致：一台高瘦的手机（逻辑 360×1800）。
@@ -42,13 +41,7 @@ Future<void> _pumpApp(WidgetTester tester) async {
   final settings = await SettingsStore.load();
   settings.welcomeCompleted = true;
   await tester.pumpWidget(
-    ShuVpnApp(
-      settings: settings,
-      updateClient: StubShuUpdateClient(),
-      // 通知页一打开就拉列表；这里装的是空替身，所以它停在「暂无公告」而不
-      // 是去连 shu.edu.cn。
-      announcementClient: StubShuAnnouncementClient(),
-    ),
+    ShuVpnApp(settings: settings, updateClient: StubShuUpdateClient()),
   );
   await tester.pumpAndSettle();
 }
@@ -138,9 +131,7 @@ void main() {
     await tester.tap(find.byTooltip('通知'));
     await _pumpMidTransition(tester);
 
-    // ⚠️ 量的是**整页**而不是页内某段文字：通知页的内容随请求状态换
-    //（转圈 / 列表 / 空态），拿它里面任何一块当锚点，这条断言就会变成
-    //「那一块恰好存在」的测试。页面本身的左边界与内容无关。
+    // 量的是整页的位移，标签切换不应改变路由的转场行为。
     expect(
       tester.getTopLeft(find.byType(NotificationsPage)).dx,
       greaterThan(60),

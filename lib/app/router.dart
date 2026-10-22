@@ -3,11 +3,9 @@ import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/account/account_center.dart';
-import '../core/announcements/shu_announcement.dart';
 import '../core/settings/settings_store.dart';
 import '../features/account/account_page.dart';
 import '../features/connect/connect_page.dart';
-import '../features/notifications/announcement_detail_page.dart';
 import '../features/notifications/notifications_page.dart';
 import '../features/onboarding/welcome_page.dart';
 import '../features/services/coming_soon_page.dart';
@@ -207,17 +205,6 @@ GoRouter createShuRouter({required SettingsStore settings}) {
         parentNavigatorKey: rootNavigatorKey,
         path: '/notifications',
         builder: (context, state) => const NotificationsPage(),
-        routes: <RouteBase>[
-          // 条目整份随 `extra` 过来，不按 id 重新查一遍：详情页要的标题与
-          // 日期列表里已经有，重拉一次列表只是多一次往返。
-          _subPage(
-            parentNavigatorKey: rootNavigatorKey,
-            path: 'detail',
-            builder: (context, state) => AnnouncementDetailPage(
-              item: state.extra! as ShuAnnouncementListItem,
-            ),
-          ),
-        ],
       ),
       // 引导页挂在**根导航器的最外层**：它要盖住 dock，也不能被任何一条
       // 二级路由当作「上一页」推回去。
