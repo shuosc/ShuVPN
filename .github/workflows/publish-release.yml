@@ -1,0 +1,147 @@
+name: Publish release assets
+'on':
+  workflow_call:
+    inputs:
+      platform:
+        type: string
+        required: true
+permissions:
+  contents: write
+jobs:
+  publish:
+    name: Publish ${{ inputs.platform }} assets
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Read and validate release version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "Releases must be created from the main branch."
+            exit 1
+          fi
+
+          app_version="$(sed -n 's/^version:[[:space:]]*//p' pubspec.yaml | head -n 1)"
+          if [[ ! "$app_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?\+[0-9]+$ ]]; then
+            echo "pubspec.yaml must contain a version such as 0.4.7+19."
+            exit 1
+          fi
+
+          version_name="${app_version%%+*}"
+          build_number="${app_version##*+}"
+          release_tag="v${version_name}"
+
+          tag_exists=false
+          if git rev-parse --verify --quiet "refs/tags/${release_tag}" >/dev/null; then
+            tag_exists=true
+            tag_commit="$(git rev-list -n 1 "$release_tag")"
+            if [[ "$tag_commit" != "$GITHUB_SHA" ]]; then
+              echo "Tag ${release_tag} points to ${tag_commit}, not this commit (${GITHUB_SHA})."
+              echo "Update pubspec.yaml before releasing changed code."
+              exit 1
+            fi
+            echo "Tag ${release_tag} already points to this commit; it can be reused."
+          fi
+
+          echo "app_version=${app_version}" >> "$GITHUB_OUTPUT"
+          echo "version_name=${version_name}" >> "$GITHUB_OUTPUT"
+          echo "build_number=${build_number}" >> "$GITHUB_OUTPUT"
+          echo "release_tag=${release_tag}" >> "$GITHUB_OUTPUT"
+          echo "tag_exists=${tag_exists}" >> "$GITHUB_OUTPUT"
+      - name: Prepare release notes
+        id: notes
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.version.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+
+          previous_tag=""
+          while IFS= read -r candidate; do
+            if [[ "$candidate" != "$RELEASE_TAG" ]]; then
+              previous_tag="$candidate"
+              break
+            fi
+          done < <(git tag --merged "$GITHUB_SHA" --sort=-version:refname)
+
+          if [[ -n "$previous_tag" ]]; then
+            changelog_url="https://github.com/${GITHUB_REPOSITORY}/compare/${previous_tag}...${RELEASE_TAG}"
+            notes="Full changelog: [${previous_tag}...${RELEASE_TAG}](${changelog_url})"
+          else
+            changelog_url="https://github.com/${GITHUB_REPOSITORY}/commits/${RELEASE_TAG}"
+            notes="Full commit history: [View all commits](${changelog_url})"
+          fi
+
+          # 多行输出必须用 name<<EOF ... EOF 分隔符格式，不能写成单行。
+          {
+            echo "notes<<RELEASE_NOTES_EOF"
+            echo "$notes"
+            echo
+            echo "### Verifying the download"
+            echo
+            echo "Release binaries carry signed build provenance attestations. Verify a downloaded APK or ZIP with the GitHub CLI:"
+            echo
+            echo '```'
+            echo "gh attestation verify <downloaded-file> --repo ${GITHUB_REPOSITORY}"
+            echo '```'
+            echo "RELEASE_NOTES_EOF"
+          } >> "$GITHUB_OUTPUT"
+      - name: Download all architecture builds
+        uses: actions/download-artifact@v8
+        with:
+          pattern: release-${{ inputs.platform }}-*
+          path: dist
+          merge-multiple: true
+      - name: Validate complete platform assets
+        shell: bash
+        env:
+          PLATFORM: ${{ inputs.platform }}
+          VERSION: ${{ steps.version.outputs.version_name }}
+        run: |
+          set -euo pipefail
+          case "$PLATFORM" in
+            android) architectures=(arm64-v8a armeabi-v7a x86_64 universal); extension=apk ;;
+            windows) architectures=(x64 arm64); extension=zip ;;
+            *) echo "Unsupported platform: $PLATFORM"; exit 1 ;;
+          esac
+          for architecture in "${architectures[@]}"; do
+            test -s "dist/ShuVPN-v${VERSION}-${PLATFORM}-${architecture}.${extension}"
+          done
+          [[ "$(find dist -maxdepth 1 -type f | wc -l)" -eq "${#architectures[@]}" ]]
+      - name: Create or extend GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.version.outputs.release_tag }}
+          TAG_EXISTS: ${{ steps.version.outputs.tag_exists }}
+          RELEASE_NOTES: ${{ steps.notes.outputs.notes }}
+        run: |
+          set -euo pipefail
+
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            # Version validation above already requires an existing tag to
+            # point to this exact commit. Preserve the other platform's assets.
+            gh release upload "$RELEASE_TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+            exit 0
+          fi
+
+          release_args=(
+            "$RELEASE_TAG"
+            dist/*
+            --repo "$GITHUB_REPOSITORY"
+            --title "ShuVPN $RELEASE_TAG"
+            --notes "$RELEASE_NOTES"
+          )
+          if [[ "$TAG_EXISTS" == "true" ]]; then
+            release_args+=(--verify-tag)
+          else
+            release_args+=(--target "$GITHUB_SHA")
+          fi
+
+          gh release create "${release_args[@]}"

@@ -1,0 +1,30 @@
+name: Set up pinned Flutter for the native runner ABI
+description: Install Flutter 3.47.2 with a native Dart SDK on Windows ARM64.
+runs:
+  using: composite
+  steps:
+  - name: Set up standard Flutter SDK
+    if: runner.os != 'Windows' || runner.arch != 'ARM64'
+    uses: subosito/flutter-action@v2
+    with:
+      flutter-version: 3.47.2
+      channel: stable
+      cache: true
+  - name: Bootstrap native Windows ARM64 Flutter SDK
+    if: runner.os == 'Windows' && runner.arch == 'ARM64'
+    shell: pwsh
+    run: |
+      $ErrorActionPreference = 'Stop'
+      # The Windows stable archive contains x64 Dart. Bootstrap from the same Flutter
+      # tag so update_dart_sdk.ps1 downloads the engine-matched native ARM64 Dart SDK.
+      $flutterPath = Join-Path $env:RUNNER_TEMP 'flutter-native-arm64'
+      git clone --depth 1 --branch 3.47.2 https://github.com/flutter/flutter.git $flutterPath
+      if ($LASTEXITCODE -ne 0) { throw 'Flutter checkout failed.' }
+      if ($env:PROCESSOR_ARCHITECTURE -ne 'ARM64') { throw 'A native ARM64 PowerShell host is required.' }
+      & "$flutterPath/bin/flutter.bat" --version
+      if ($LASTEXITCODE -ne 0) { throw 'Flutter ARM64 bootstrap failed.' }
+      $probePath = Join-Path $env:RUNNER_TEMP 'flutter-abi.dart'
+      "import 'dart:ffi'; void main() { if (Abi.current() != Abi.windowsArm64) throw StateError('Expected native Windows ARM64 Dart'); }" | Set-Content -LiteralPath $probePath
+      & "$flutterPath/bin/dart.bat" $probePath
+      if ($LASTEXITCODE -ne 0) { throw 'Flutter installed an incompatible Dart SDK.' }
+      "$flutterPath/bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8

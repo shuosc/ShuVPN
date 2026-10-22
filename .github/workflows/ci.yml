@@ -1,46 +1,27 @@
 name: Flutter CI
-
-on:
+'on':
   push:
-    branches: [main]
+    branches:
+      - main
   pull_request:
-    branches: [main]
-
+    branches:
+      - main
 permissions:
   contents: read
-
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
-
 jobs:
-  build-and-test:
-    name: ${{ matrix.platform }} build and test
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: Android
-            os: ubuntu-latest
-            build-command: flutter build apk --release --split-per-abi --target-platform android-arm64
-            artifact-name: shuvpn-android-arm64
-            artifact-path: build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
-          - platform: Windows
-            os: windows-latest
-            build-command: ./scripts/build_windows.ps1
-            artifact-name: shuvpn-windows-x64
-            artifact-path: |
-              build/windows/ShuVPN-windows-x64.zip
-              build/windows/ShuVPN-windows-x64.zip.sha256
-
+  changes:
+    name: Detect code changes
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.changes.outputs.code }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
-
       - name: Detect code changes
         id: changes
         shell: bash
@@ -78,49 +59,108 @@ jobs:
           done < <(git diff --name-only "$compare_base" HEAD)
 
           echo "code=$code_changed" >> "$GITHUB_OUTPUT"
-
+  android:
+    name: Android (${{ matrix.architecture }})
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        architecture:
+          - arm64-v8a
+          - armeabi-v7a
+          - x86_64
+          - universal
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - name: Set up Java
-        if: steps.changes.outputs.code == 'true' && matrix.platform == 'Android'
         uses: actions/setup-java@v6
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: '17'
           cache: gradle
-
       - name: Set up Flutter
-        if: steps.changes.outputs.code == 'true'
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: "3.47.2"
-          channel: stable
-          cache: true
-
+        uses: ./.github/actions/setup-flutter
       - name: Install dependencies
-        if: steps.changes.outputs.code == 'true'
         run: flutter pub get
-
       - name: Analyze Dart and Flutter code
-        if: steps.changes.outputs.code == 'true'
         run: flutter analyze
-
       - name: Run tests
-        if: steps.changes.outputs.code == 'true'
         run: flutter test --concurrency=1
-
-      - name: Build application
-        if: steps.changes.outputs.code == 'true'
+      - name: Build and validate architecture
         shell: pwsh
-        run: ${{ matrix.build-command }}
-
-      - name: Upload build
-        if: steps.changes.outputs.code == 'true'
+        run: ./scripts/build_android.ps1 -Architecture "${{ matrix.architecture }}"
+      - name: Upload architecture build
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.artifact-name }}-${{ github.sha }}
-          path: ${{ matrix.artifact-path }}
+          name: ci-android-${{ matrix.architecture }}-${{ github.sha }}
+          path: build/release/*.apk
           if-no-files-found: error
           retention-days: 14
-
-      - name: Skip Flutter checks for documentation-only changes
-        if: steps.changes.outputs.code != 'true'
-        run: echo "No application or build files changed."
+  windows:
+    name: Windows (${{ matrix.architecture }})
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: x64
+            runner: windows-latest
+          - architecture: arm64
+            runner: windows-11-arm
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Set up Flutter
+        uses: ./.github/actions/setup-flutter
+      - name: Install dependencies
+        run: flutter pub get
+      - name: Analyze Dart and Flutter code
+        run: flutter analyze
+      - name: Run tests
+        run: flutter test --concurrency=1
+      - name: Build and validate architecture
+        shell: pwsh
+        run: ./scripts/build_windows.ps1 -Architecture "${{ matrix.architecture }}"
+      - name: Upload architecture build
+        uses: actions/upload-artifact@v7
+        with:
+          name: ci-windows-${{ matrix.architecture }}-${{ github.sha }}
+          path: build/release/*.zip
+          if-no-files-found: error
+          retention-days: 14
+  required:
+    name: CI required
+    if: always()
+    needs:
+      - changes
+      - android
+      - windows
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every platform and architecture
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          CODE: ${{ needs.changes.outputs.code }}
+          ANDROID_RESULT: ${{ needs.android.result }}
+          WINDOWS_RESULT: ${{ needs.windows.result }}
+        run: |
+          set -euo pipefail
+          test "$CHANGES_RESULT" = success
+          if [[ "$CODE" == true ]]; then
+            test "$ANDROID_RESULT" = success
+            test "$WINDOWS_RESULT" = success
+          else
+            test "$ANDROID_RESULT" = skipped
+            test "$WINDOWS_RESULT" = skipped
+          fi

@@ -1,31 +1,31 @@
 name: Android Release
-
-on:
-  workflow_dispatch:
-
+'on':
+  workflow_dispatch: null
 permissions:
   contents: write
-  # id-token 用于向 Sigstore 换取短期签名证书，attestations 用于把证明写入仓库。
   id-token: write
   attestations: write
-
 concurrency:
-  # Both platforms may append assets to the same version; serialize publication.
   group: shuvpn-release
   cancel-in-progress: false
-
 jobs:
-  release:
-    name: Build and publish a signed arm64 APK
+  build:
+    name: Build android (${{ matrix.architecture }})
     runs-on: ubuntu-latest
     timeout-minutes: 45
-
+    strategy:
+      fail-fast: false
+      matrix:
+        architecture:
+          - arm64-v8a
+          - armeabi-v7a
+          - x86_64
+          - universal
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
-
       - name: Read and validate release version
         id: version
         shell: bash
@@ -33,7 +33,7 @@ jobs:
           set -euo pipefail
 
           if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
-            echo "Android releases must be created from the main branch."
+            echo "Releases must be created from the main branch."
             exit 1
           fi
 
@@ -46,7 +46,6 @@ jobs:
           version_name="${app_version%%+*}"
           build_number="${app_version##*+}"
           release_tag="v${version_name}"
-          apk_name="ShuVPN-v${version_name}-android-arm64-v8a.apk"
 
           tag_exists=false
           if git rev-parse --verify --quiet "refs/tags/${release_tag}" >/dev/null; then
@@ -64,71 +63,21 @@ jobs:
           echo "version_name=${version_name}" >> "$GITHUB_OUTPUT"
           echo "build_number=${build_number}" >> "$GITHUB_OUTPUT"
           echo "release_tag=${release_tag}" >> "$GITHUB_OUTPUT"
-          echo "apk_name=${apk_name}" >> "$GITHUB_OUTPUT"
           echo "tag_exists=${tag_exists}" >> "$GITHUB_OUTPUT"
-
-      - name: Prepare release notes
-        id: notes
-        shell: bash
-        env:
-          RELEASE_TAG: ${{ steps.version.outputs.release_tag }}
-        run: |
-          set -euo pipefail
-
-          previous_tag=""
-          while IFS= read -r candidate; do
-            if [[ "$candidate" != "$RELEASE_TAG" ]]; then
-              previous_tag="$candidate"
-              break
-            fi
-          done < <(git tag --merged "$GITHUB_SHA" --sort=-version:refname)
-
-          if [[ -n "$previous_tag" ]]; then
-            changelog_url="https://github.com/${GITHUB_REPOSITORY}/compare/${previous_tag}...${RELEASE_TAG}"
-            notes="Full changelog: [${previous_tag}...${RELEASE_TAG}](${changelog_url})"
-          else
-            changelog_url="https://github.com/${GITHUB_REPOSITORY}/commits/${RELEASE_TAG}"
-            notes="Full commit history: [View all commits](${changelog_url})"
-          fi
-
-          # 多行输出必须用 name<<EOF ... EOF 分隔符格式，不能写成单行。
-          {
-            echo "notes<<RELEASE_NOTES_EOF"
-            echo "$notes"
-            echo
-            echo "### Verifying the download"
-            echo
-            echo "Release binaries carry signed build provenance attestations. Verify a downloaded APK or ZIP with the GitHub CLI:"
-            echo
-            echo '```'
-            echo "gh attestation verify <downloaded-file> --repo ${GITHUB_REPOSITORY}"
-            echo '```'
-            echo "RELEASE_NOTES_EOF"
-          } >> "$GITHUB_OUTPUT"
-
       - name: Set up Java
         uses: actions/setup-java@v6
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: '17'
           cache: gradle
-
       - name: Set up Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: "3.47.2"
-          channel: stable
-          cache: true
-
+        uses: ./.github/actions/setup-flutter
       - name: Install dependencies
         run: flutter pub get
-
       - name: Analyze Dart and Flutter code
         run: flutter analyze
-
       - name: Run tests
-        run: flutter test
-
+        run: flutter test --concurrency=1
       - name: Restore Android signing files
         shell: bash
         env:
@@ -160,35 +109,9 @@ jobs:
             "storeFile=shuvpn-release.jks" \
             > android/key.properties
           chmod 600 android/key.properties
-
-      - name: Build the release APK
-        run: |
-          flutter build apk \
-            --release \
-            --split-per-abi \
-            --target-platform android-arm64 \
-            --build-name "${{ steps.version.outputs.version_name }}" \
-            --build-number "${{ steps.version.outputs.build_number }}"
-
-      - name: Prepare release asset
-        id: assets
-        shell: bash
-        env:
-          APK_NAME: ${{ steps.version.outputs.apk_name }}
-        run: |
-          set -euo pipefail
-
-          # This workflow currently targets only arm64 with --target-platform,
-          # so this is the only APK there is to ship.
-          source_apk="build/app/outputs/flutter-apk/app-arm64-v8a-release.apk"
-          if [[ ! -f "$source_apk" ]]; then
-            echo "Expected arm64-v8a APK was not produced: $source_apk"
-            exit 1
-          fi
-
-          mkdir -p dist
-          cp "$source_apk" "dist/${APK_NAME}"
-
+      - name: Build and validate architecture
+        shell: pwsh
+        run: ./scripts/build_android.ps1 -Architecture "${{ matrix.architecture }}"
       - name: Verify the release signature
         shell: bash
         run: |
@@ -209,7 +132,7 @@ jobs:
             exit 1
           fi
 
-          for apk in dist/*.apk; do
+          for apk in build/release/*.apk; do
             echo "--- ${apk} ---"
             "$apksigner" verify --print-certs "$apk" | tee /tmp/certs.txt
             if grep -q "CN=Android Debug" /tmp/certs.txt; then
@@ -217,56 +140,26 @@ jobs:
               exit 1
             fi
           done
-
       - name: Generate build provenance attestation
-        # subject-path 不带 subject-name 时，subject 名取文件名本身，
-        # 因此 gh attestation verify 直接用 APK 文件名即可匹配。
         uses: actions/attest-build-provenance@v4
         with:
-          subject-path: dist/*.apk
-
-      - name: Upload workflow artifact
+          subject-path: build/release/*.apk
+      - name: Upload architecture build
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ steps.version.outputs.release_tag }}-android-arm64-v8a
-          path: dist/*.apk
+          name: release-android-${{ matrix.architecture }}
+          path: build/release/*.apk
           if-no-files-found: error
           retention-days: 14
-
-      - name: Create or extend GitHub Release
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ steps.version.outputs.release_tag }}
-          TAG_EXISTS: ${{ steps.version.outputs.tag_exists }}
-          RELEASE_NOTES: ${{ steps.notes.outputs.notes }}
-        run: |
-          set -euo pipefail
-
-          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            # Version validation above already requires an existing tag to
-            # point to this exact commit. Preserve the other platform's assets.
-            gh release upload "$RELEASE_TAG" dist/*.apk --repo "$GITHUB_REPOSITORY" --clobber
-            exit 0
-          fi
-
-          release_args=(
-            "$RELEASE_TAG"
-            dist/*.apk
-            --repo "$GITHUB_REPOSITORY"
-            --title "ShuVPN $RELEASE_TAG"
-            --notes "$RELEASE_NOTES"
-          )
-          if [[ "$TAG_EXISTS" == "true" ]]; then
-            release_args+=(--verify-tag)
-          else
-            release_args+=(--target "$GITHUB_SHA")
-          fi
-
-          gh release create "${release_args[@]}"
-
       - name: Remove signing files
         if: always()
         run: |
           rm -f android/shuvpn-release.jks
           rm -f android/key.properties
+  publish:
+    needs: build
+    uses: ./.github/workflows/publish-release.yml
+    with:
+      platform: android
+    permissions:
+      contents: write

@@ -1,29 +1,31 @@
 name: Windows Release
-
-on:
-  workflow_dispatch:
-
+'on':
+  workflow_dispatch: null
 permissions:
   contents: write
   id-token: write
   attestations: write
-
 concurrency:
   group: shuvpn-release
   cancel-in-progress: false
-
 jobs:
-  release:
-    name: Build and publish a Windows x64 ZIP
-    runs-on: windows-latest
+  build:
+    name: Build windows (${{ matrix.architecture }})
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
-
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: x64
+            runner: windows-latest
+          - architecture: arm64
+            runner: windows-11-arm
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
-
       - name: Read and validate release version
         id: version
         shell: bash
@@ -31,20 +33,19 @@ jobs:
           set -euo pipefail
 
           if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
-            echo "Windows releases must be created from the main branch."
+            echo "Releases must be created from the main branch."
             exit 1
           fi
 
           app_version="$(sed -n 's/^version:[[:space:]]*//p' pubspec.yaml | head -n 1)"
           if [[ ! "$app_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?\+[0-9]+$ ]]; then
-            echo "pubspec.yaml must contain a version such as 0.5.2+12."
+            echo "pubspec.yaml must contain a version such as 0.4.7+19."
             exit 1
           fi
 
           version_name="${app_version%%+*}"
           build_number="${app_version##*+}"
           release_tag="v${version_name}"
-          archive_name="ShuVPN-v${version_name}-windows-x64.zip"
 
           tag_exists=false
           if git rev-parse --verify --quiet "refs/tags/${release_tag}" >/dev/null; then
@@ -55,119 +56,40 @@ jobs:
               echo "Update pubspec.yaml before releasing changed code."
               exit 1
             fi
+            echo "Tag ${release_tag} already points to this commit; it can be reused."
           fi
 
+          echo "app_version=${app_version}" >> "$GITHUB_OUTPUT"
           echo "version_name=${version_name}" >> "$GITHUB_OUTPUT"
           echo "build_number=${build_number}" >> "$GITHUB_OUTPUT"
           echo "release_tag=${release_tag}" >> "$GITHUB_OUTPUT"
-          echo "archive_name=${archive_name}" >> "$GITHUB_OUTPUT"
           echo "tag_exists=${tag_exists}" >> "$GITHUB_OUTPUT"
-
-      - name: Prepare release notes
-        id: notes
-        shell: bash
-        env:
-          RELEASE_TAG: ${{ steps.version.outputs.release_tag }}
-        run: |
-          set -euo pipefail
-
-          previous_tag=""
-          while IFS= read -r candidate; do
-            if [[ "$candidate" != "$RELEASE_TAG" ]]; then
-              previous_tag="$candidate"
-              break
-            fi
-          done < <(git tag --merged "$GITHUB_SHA" --sort=-version:refname)
-
-          if [[ -n "$previous_tag" ]]; then
-            notes="Full changelog: [${previous_tag}...${RELEASE_TAG}](https://github.com/${GITHUB_REPOSITORY}/compare/${previous_tag}...${RELEASE_TAG})"
-          else
-            notes="Full commit history: [View all commits](https://github.com/${GITHUB_REPOSITORY}/commits/${RELEASE_TAG})"
-          fi
-
-          {
-            echo "notes<<RELEASE_NOTES_EOF"
-            echo "$notes"
-            echo
-            echo "### Verifying the download"
-            echo
-            echo "Release binaries carry signed build provenance attestations. Verify a downloaded APK or ZIP with the GitHub CLI:"
-            echo
-            echo '```'
-            echo "gh attestation verify <downloaded-file> --repo ${GITHUB_REPOSITORY}"
-            echo '```'
-            echo "RELEASE_NOTES_EOF"
-          } >> "$GITHUB_OUTPUT"
-
       - name: Set up Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: "3.47.2"
-          channel: stable
-          cache: true
-
+        uses: ./.github/actions/setup-flutter
       - name: Install dependencies
         run: flutter pub get
-
       - name: Analyze Dart and Flutter code
         run: flutter analyze
-
       - name: Run tests
         run: flutter test --concurrency=1
-
-      - name: Build and package Windows
+      - name: Build and validate architecture
         shell: pwsh
-        run: ./scripts/build_windows.ps1
-
-      - name: Prepare release assets
-        shell: pwsh
-        env:
-          ARCHIVE_NAME: ${{ steps.version.outputs.archive_name }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          New-Item -ItemType Directory -Path dist -Force | Out-Null
-          $archivePath = Join-Path 'dist' $env:ARCHIVE_NAME
-          Copy-Item -LiteralPath 'build/windows/ShuVPN-windows-x64.zip' -Destination $archivePath
-
+        run: ./scripts/build_windows.ps1 -Architecture "${{ matrix.architecture }}"
       - name: Generate build provenance attestation
         uses: actions/attest-build-provenance@v4
         with:
-          subject-path: dist/*.zip
-
-      - name: Upload workflow artifact
+          subject-path: build/release/*.zip
+      - name: Upload architecture build
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ steps.version.outputs.release_tag }}-windows-x64
-          path: dist/*.zip
+          name: release-windows-${{ matrix.architecture }}
+          path: build/release/*.zip
           if-no-files-found: error
           retention-days: 14
-
-      - name: Create or extend GitHub Release
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ steps.version.outputs.release_tag }}
-          TAG_EXISTS: ${{ steps.version.outputs.tag_exists }}
-          RELEASE_NOTES: ${{ steps.notes.outputs.notes }}
-        run: |
-          set -euo pipefail
-
-          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" dist/*.zip --repo "$GITHUB_REPOSITORY" --clobber
-            exit 0
-          fi
-
-          release_args=(
-            "$RELEASE_TAG"
-            dist/*.zip
-            --repo "$GITHUB_REPOSITORY"
-            --title "ShuVPN $RELEASE_TAG"
-            --notes "$RELEASE_NOTES"
-          )
-          if [[ "$TAG_EXISTS" == "true" ]]; then
-            release_args+=(--verify-tag)
-          else
-            release_args+=(--target "$GITHUB_SHA")
-          fi
-
-          gh release create "${release_args[@]}"
+  publish:
+    needs: build
+    uses: ./.github/workflows/publish-release.yml
+    with:
+      platform: windows
+    permissions:
+      contents: write
