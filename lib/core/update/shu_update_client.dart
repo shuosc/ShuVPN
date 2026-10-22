@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'shu_update_info.dart';
+import 'shu_release_target.dart';
 
 /// 远端最新版本的一次查询。
 ///
@@ -18,14 +19,16 @@ abstract interface class ShuUpdateClient {
 /// 只问 `releases/latest` 一个端点，所以不需要令牌：GitHub 对匿名请求的限额
 /// 是每 IP 每小时 60 次，而这份代码每次启动最多问一次。
 class GithubReleaseClient implements ShuUpdateClient {
-  GithubReleaseClient({Uri? latestReleaseUri})
-    : latestReleaseUri = latestReleaseUri ?? defaultLatestReleaseUri;
+  GithubReleaseClient({Uri? latestReleaseUri, ShuReleaseTarget? target})
+    : latestReleaseUri = latestReleaseUri ?? defaultLatestReleaseUri,
+      target = target ?? ShuReleaseTarget.current;
 
   static final Uri defaultLatestReleaseUri = Uri.parse(
     'https://api.github.com/repos/shuosc/ShuVPN/releases/latest',
   );
 
   final Uri latestReleaseUri;
+  final ShuReleaseTarget? target;
 
   /// 单次请求的超时。
   ///
@@ -37,7 +40,11 @@ class GithubReleaseClient implements ShuUpdateClient {
   Future<ShuUpdateInfo?> checkForUpdate(String currentVersion) async {
     final json = await _fetchLatestRelease();
     if (json == null) return null;
-    return updateInfoFromReleaseJson(json, currentVersion: currentVersion);
+    return updateInfoFromReleaseJson(
+      json,
+      currentVersion: currentVersion,
+      target: target,
+    );
   }
 
   /// 读一次 `releases/latest`；404（上游一个正式发布都没有）返回 null。
@@ -90,13 +97,19 @@ class GithubReleaseClient implements ShuUpdateClient {
 ShuUpdateInfo? updateInfoFromReleaseJson(
   Map<String, Object?> json, {
   required String currentVersion,
+  ShuReleaseTarget? target,
 }) {
   final latestVersion = stripVersionTag(json['tag_name']);
   if (latestVersion.isEmpty) return null;
   if (compareShuVersions(latestVersion, currentVersion) <= 0) return null;
   return ShuUpdateInfo(
     latestVersion: latestVersion,
-    downloadUrl: pickApkDownloadUrl(json['assets']),
+    downloadUrl: pickReleaseDownloadUrl(
+      json['assets'],
+      version: latestVersion,
+      tag: _stringValue(json['tag_name']).trim(),
+      target: target,
+    ),
     releasePageUrl: _stringValue(json['html_url']),
     publishedAt: DateTime.tryParse(_stringValue(json['published_at'])),
   );
@@ -111,32 +124,30 @@ String stripVersionTag(Object? tag) {
   return text;
 }
 
-/// ABI 偏好顺序。
-///
-/// 仓库目前只发 arm64 一个产物，列表留全是为了将来多产物时不必改代码。
-const List<String> _abiPreference = <String>['arm64-v8a', 'arm64', 'universal'];
-
-/// 从 `assets[]` 里挑出 APK 的下载直链，挑不到返回空串。
-///
-/// 只认 `.apk` 结尾：同一个发布里还有一个 `ShuVPN-vX.Y.Z.apk.sha256`，用
-/// 「名字里有 apk」判断会把它算进来，用户点「更新」下到的是一行哈希。
-String pickApkDownloadUrl(Object? assets) {
-  if (assets is! List) return '';
-  final candidates = <({String name, String url})>[];
+/// Select only a published asset for this exact version, platform and ABI.
+/// Never guess a URL or fall back to another ABI, a universal APK or a legacy
+/// unlabelled APK. Missing assets leave the release page available to callers.
+String pickReleaseDownloadUrl(
+  Object? assets, {
+  required String version,
+  required String tag,
+  required ShuReleaseTarget? target,
+}) {
+  if (target == null || assets is! List) return '';
+  final name = target.assetName(version);
+  final expectedUri = Uri.https(
+    'github.com',
+    '/shuosc/ShuVPN/releases/download/$tag/$name',
+  );
   for (final asset in assets) {
-    if (asset is! Map) continue;
-    final name = _stringValue(asset['name']).toLowerCase();
-    final url = _stringValue(asset['browser_download_url']).trim();
-    if (!name.endsWith('.apk') || url.isEmpty) continue;
-    candidates.add((name: name, url: url));
+    if (asset is! Map || asset['name'] != name) continue;
+    if (asset['state'] != null && asset['state'] != 'uploaded') continue;
+    final uri = Uri.tryParse(
+      _stringValue(asset['browser_download_url']).trim(),
+    );
+    if (uri == expectedUri) return uri.toString();
   }
-  if (candidates.isEmpty) return '';
-  for (final abi in _abiPreference) {
-    for (final candidate in candidates) {
-      if (candidate.name.contains(abi)) return candidate.url;
-    }
-  }
-  return candidates.first.url;
+  return '';
 }
 
 String _stringValue(Object? value) => value is String ? value : '';
