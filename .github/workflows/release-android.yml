@@ -46,7 +46,7 @@ jobs:
           version_name="${app_version%%+*}"
           build_number="${app_version##*+}"
           release_tag="v${version_name}"
-          apk_name="ShuVPN-v${version_name}.apk"
+          apk_name="ShuVPN-v${version_name}-android-arm64-v8a.apk"
 
           tag_exists=false
           if git rev-parse --verify --quiet "refs/tags/${release_tag}" >/dev/null; then
@@ -72,7 +72,6 @@ jobs:
         shell: bash
         env:
           RELEASE_TAG: ${{ steps.version.outputs.release_tag }}
-          APK_NAME: ${{ steps.version.outputs.apk_name }}
         run: |
           set -euo pipefail
 
@@ -179,8 +178,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          # 32-bit is not supported. The build above is restricted to arm64
-          # with --target-platform, so this is the only APK there is to ship.
+          # This workflow currently targets only arm64 with --target-platform,
+          # so this is the only APK there is to ship.
           source_apk="build/app/outputs/flutter-apk/app-arm64-v8a-release.apk"
           if [[ ! -f "$source_apk" ]]; then
             echo "Expected arm64-v8a APK was not produced: $source_apk"
@@ -189,7 +188,6 @@ jobs:
 
           mkdir -p dist
           cp "$source_apk" "dist/${APK_NAME}"
-          (cd dist && sha256sum "${APK_NAME}" > "${APK_NAME}.sha256")
 
       - name: Verify the release signature
         shell: bash
@@ -230,8 +228,8 @@ jobs:
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ steps.version.outputs.release_tag }}
-          path: dist/*
+          name: ${{ steps.version.outputs.release_tag }}-android-arm64-v8a
+          path: dist/*.apk
           if-no-files-found: error
           retention-days: 14
 
@@ -248,13 +246,13 @@ jobs:
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             # Version validation above already requires an existing tag to
             # point to this exact commit. Preserve the other platform's assets.
-            gh release upload "$RELEASE_TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+            gh release upload "$RELEASE_TAG" dist/*.apk --repo "$GITHUB_REPOSITORY" --clobber
             exit 0
           fi
 
           release_args=(
             "$RELEASE_TAG"
-            dist/*
+            dist/*.apk
             --repo "$GITHUB_REPOSITORY"
             --title "ShuVPN $RELEASE_TAG"
             --notes "$RELEASE_NOTES"

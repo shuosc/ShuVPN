@@ -128,8 +128,6 @@ jobs:
           New-Item -ItemType Directory -Path dist -Force | Out-Null
           $archivePath = Join-Path 'dist' $env:ARCHIVE_NAME
           Copy-Item -LiteralPath 'build/windows/ShuVPN-windows-x64.zip' -Destination $archivePath
-          $hash = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$hash  $env:ARCHIVE_NAME" | Set-Content -LiteralPath "$archivePath.sha256" -Encoding ascii
 
       - name: Generate build provenance attestation
         uses: actions/attest-build-provenance@v4
@@ -140,7 +138,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.version.outputs.release_tag }}-windows-x64
-          path: dist/*
+          path: dist/*.zip
           if-no-files-found: error
           retention-days: 14
 
@@ -155,13 +153,13 @@ jobs:
           set -euo pipefail
 
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+            gh release upload "$RELEASE_TAG" dist/*.zip --repo "$GITHUB_REPOSITORY" --clobber
             exit 0
           fi
 
           release_args=(
             "$RELEASE_TAG"
-            dist/*
+            dist/*.zip
             --repo "$GITHUB_REPOSITORY"
             --title "ShuVPN $RELEASE_TAG"
             --notes "$RELEASE_NOTES"
