@@ -804,6 +804,8 @@ class _SpeedGaugePainter extends CustomPainter {
         text: TextSpan(
           text: text,
           style: TextStyle(
+            fontFamily: ShuYoTextStyles.fontFamily,
+            fontFamilyFallback: ShuYoTextStyles.fontFamilyFallback,
             fontSize: (radius * 0.075).clamp(9.0, 11.0),
             height: 1,
             fontWeight: major ? FontWeight.w600 : FontWeight.w400,

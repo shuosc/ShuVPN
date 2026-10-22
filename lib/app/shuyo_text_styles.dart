@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 /// Typography scale ported verbatim from the ShuYo project.
@@ -7,6 +8,31 @@ import 'package:flutter/material.dart';
 /// future refresh of the design tokens stays a copy instead of a re-design.
 class ShuYoTextStyles {
   const ShuYoTextStyles._();
+
+  /// Windows uses its UI fonts for both Latin and Chinese text. Explicit
+  /// component styles (for example AppBar titles) also need this fallback:
+  /// they can replace the inherited text theme entirely.
+  static String? get fontFamily =>
+      defaultTargetPlatform == TargetPlatform.windows ? 'Segoe UI' : null;
+
+  static List<String>? get fontFamilyFallback =>
+      defaultTargetPlatform == TargetPlatform.windows
+      ? const ['Microsoft YaHei UI', 'Microsoft YaHei', 'Segoe UI Emoji']
+      : null;
+
+  static TextStyle _style({
+    required double fontSize,
+    required double height,
+    required FontWeight fontWeight,
+    Color? color,
+  }) => TextStyle(
+    fontFamily: fontFamily,
+    fontFamilyFallback: fontFamilyFallback,
+    fontSize: fontSize,
+    height: height,
+    fontWeight: fontWeight,
+    color: color,
+  );
 
   static const TextTheme theme = TextTheme(
     displayLarge: TextStyle(
@@ -87,7 +113,7 @@ class ShuYoTextStyles {
   );
 
   static TextStyle pageTitle({Color? color}) {
-    return TextStyle(
+    return _style(
       fontSize: 19,
       height: 1.22,
       fontWeight: FontWeight.w600,
@@ -96,7 +122,7 @@ class ShuYoTextStyles {
   }
 
   static TextStyle headerTitle({Color? color}) {
-    return TextStyle(
+    return _style(
       fontSize: 17.5,
       height: 1.22,
       fontWeight: FontWeight.w600,
@@ -105,7 +131,7 @@ class ShuYoTextStyles {
   }
 
   static TextStyle sectionTitle({Color? color}) {
-    return TextStyle(
+    return _style(
       fontSize: 15.5,
       height: 1.24,
       fontWeight: FontWeight.w600,
@@ -119,7 +145,7 @@ class ShuYoTextStyles {
     double height = 1.25,
     FontWeight weight = FontWeight.w500,
   }) {
-    return TextStyle(
+    return _style(
       fontSize: size,
       height: height,
       fontWeight: weight,
@@ -133,7 +159,7 @@ class ShuYoTextStyles {
     double height = 1.46,
     FontWeight weight = FontWeight.w400,
   }) {
-    return TextStyle(
+    return _style(
       fontSize: size,
       height: height,
       fontWeight: weight,
@@ -147,7 +173,7 @@ class ShuYoTextStyles {
     double height = 1.42,
     FontWeight weight = FontWeight.w400,
   }) {
-    return TextStyle(
+    return _style(
       fontSize: size,
       height: height,
       fontWeight: weight,
@@ -161,7 +187,7 @@ class ShuYoTextStyles {
     double height = 1.3,
     FontWeight weight = FontWeight.w400,
   }) {
-    return TextStyle(
+    return _style(
       fontSize: size,
       height: height,
       fontWeight: weight,
@@ -175,7 +201,7 @@ class ShuYoTextStyles {
     double height = 1.2,
     FontWeight weight = FontWeight.w500,
   }) {
-    return TextStyle(
+    return _style(
       fontSize: size,
       height: height,
       fontWeight: weight,
@@ -189,7 +215,7 @@ class ShuYoTextStyles {
     double height = 1.15,
     FontWeight weight = FontWeight.w500,
   }) {
-    return TextStyle(
+    return _style(
       fontSize: size,
       height: height,
       fontWeight: weight,

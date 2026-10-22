@@ -82,6 +82,8 @@ class ShuYoThemeSpec {
 
     return ThemeData(
       useMaterial3: true,
+      fontFamily: ShuYoTextStyles.fontFamily,
+      fontFamilyFallback: ShuYoTextStyles.fontFamilyFallback,
       brightness: colors.brightness,
       colorScheme: scheme,
       scaffoldBackgroundColor: colors.background,
@@ -218,7 +220,11 @@ class ShuYoThemeSpec {
       ),
       snackBarTheme: SnackBarThemeData(
         backgroundColor: colors.inverseSurface,
-        contentTextStyle: TextStyle(color: colors.inverseOnSurface),
+        contentTextStyle: TextStyle(
+          fontFamily: ShuYoTextStyles.fontFamily,
+          fontFamilyFallback: ShuYoTextStyles.fontFamilyFallback,
+          color: colors.inverseOnSurface,
+        ),
       ),
     );
   }
