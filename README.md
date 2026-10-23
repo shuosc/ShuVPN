@@ -17,12 +17,17 @@
 Android 版本可以打开 [release 页面](https://github.com/shuosc/ShuVPN/releases)下载。（依据设备差异，您可能需要在设置中允许「安装来自未知来源的应用」）
 
 ### Windows
-Windows 版本可以打开 [release 页面](https://github.com/shuosc/ShuVPN/releases)下载，支持 Windows 10/11 x64。完整解压后运行 `shuvpn.exe`，无需安装或管理员权限。（请保留解压后的全部文件）
+Windows 版本可以打开 [release 页面](https://github.com/shuosc/ShuVPN/releases)下载，支持 Windows 10/11 x64、arm64。完整解压后运行 `shuvpn.exe`，无需安装或管理员权限。（请保留解压后的全部文件）
 
-目前 Windows 版本仅支持代理连接，需要手动配置系统或应用代理。使用时请保持应用运行，最小化不影响连接，关闭窗口则会断开连接。
+> 目前 Windows 版本仅支持代理连接，需要手动配置系统或应用代理。使用时请保持应用运行，最小化不影响连接，关闭窗口则会断开连接。
 
-### MacOS/Linux
-目前正在全力适配中，敬请期待。
+### macOS
+macOS 版本提供 Intel（x64）和 Apple Silicon（arm64）两种 ZIP 包，需要 macOS 12 或更新版本。下载后解压，将 `ShuVPN.app` 放入「应用程序」即可。
+
+应用未使用 Apple 开发者证书签名或公证，仅保留运行所需的本地临时签名。首次打开时可能需要在「系统设置 → 隐私与安全性」中允许打开。
+
+### Linux
+Linux 版本覆盖 Flutter 支持的 x64、arm64，分别提供 DEB 和 RPM 包。请在 [release 页面](https://github.com/shuosc/ShuVPN/releases)选择对应架构和发行版的安装包，安装后从应用菜单启动 ShuVPN。
 
 ### HarmoneyOS
 > 特指 	HarmonyOS 5.0 及其未来版本的系统
@@ -32,7 +37,8 @@ Windows 版本可以打开 [release 页面](https://github.com/shuosc/ShuVPN/rel
 HarmonyOS 4.X 及其以前版本系统请使用 Android 版本安装包。
 
 ### iOS/iPadOS
-目前暂时没有 ios/iPadOS 平台的适配计划。
+iOS/iPadOS 版本提供 arm64 无签名 IPA，需要 iOS/iPadOS 15 或更新版本。安装前需要自行签名。
+
 
 如果您遇到了本应用中不符合预期的行为，欢迎先查看已有的 [Issues](https://github.com/shuosc/ShuVPN/issues)，也可以[新建 Issue](https://github.com/shuosc/ShuVPN/issues/new/choose) 反馈问题或提出建议。修复问题或新增功能时，欢迎提交 Pull Request。
 
@@ -56,7 +62,17 @@ Tools • Dart 3.13.2 • DevTools 2.60.0
 
 如果您正在为 `Windows` 平台构建，需要安装 [Visual Studio](https://visualstudio.microsoft.com/zh-hans/) 并勾选「使用 C++ 的桌面开发」工作负载，确保已安装 MSVC、CMake 与 Windows SDK。您可以执行 `flutter doctor -v` 检查开发环境。
 
-<!-- 如果您正在为 `iOS/iPadOS` 平台构建，您还需要[安装并配置](https://apps.apple.com/app/id497799835) `Xcode`，并准备可用的 Simulator 或真机进行调试。 -->
+如果您正在为 `iOS/iPadOS` 或 `macOS` 平台构建，需要使用 macOS 并[安装和配置 Xcode](https://apps.apple.com/app/id497799835)。
+
+如果您正在为 `Linux` 平台构建，需要与目标架构一致的 x64 或 arm64 Debian/Ubuntu 环境。CI 使用 Ubuntu 24.04；构建与打包依赖可通过以下命令安装：
+
+```sh
+sudo apt-get update
+sudo apt-get install --no-install-recommends -y \
+  clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev \
+  libstdc++-12-dev rpm binutils dpkg-dev desktop-file-utils \
+  git curl unzip xz-utils libglu1-mesa
+```
 
 确定配置正确后，在项目根目录执行：
 
